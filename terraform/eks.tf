@@ -8,7 +8,7 @@ resource "aws_iam_role" "cluster" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect = "Allow",
+      Effect   = "Allow",
       Principal = { Service = "eks.amazonaws.com" },
       Action   = "sts:AssumeRole"
     }]
@@ -20,7 +20,7 @@ resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-# Cluster security group
+# Cluster security group  (FIXED: multi-line ingress/egress)
 resource "aws_security_group" "cluster" {
   name        = "${var.project_name}-cluster-sg"
   description = "EKS cluster security group"
@@ -41,9 +41,7 @@ resource "aws_security_group" "cluster" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-cluster-sg"
-  }
+  tags = { Name = "${var.project_name}-cluster-sg" }
 }
 
 resource "aws_eks_cluster" "this" {
@@ -69,9 +67,9 @@ resource "aws_iam_role" "node" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect = "Allow",
+      Effect   = "Allow",
       Principal = { Service = "ec2.amazonaws.com" },
-      Action    = "sts:AssumeRole"
+      Action   = "sts:AssumeRole"
     }]
   })
 }
@@ -80,12 +78,10 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEKSWorkerNodePolicy" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 }
-
 resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOnly" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
-
 resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
@@ -103,9 +99,7 @@ resource "aws_security_group" "node" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name = "${var.project_name}-node-sg"
-  }
+  tags = { Name = "${var.project_name}-node-sg" }
 }
 
 # ------------------- Node Group A (SPOT) -------------------
@@ -124,13 +118,9 @@ resource "aws_eks_node_group" "spot" {
     min_size     = var.spot_min_size
   }
 
-  labels = {
-    pool = "spot"
-  }
+  labels = { pool = "spot" }
 
-  update_config {
-    max_unavailable = 1
-  }
+  update_config { max_unavailable = 1 }
 
   depends_on = [
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
@@ -155,13 +145,9 @@ resource "aws_eks_node_group" "on_demand" {
     min_size     = var.od_min_size
   }
 
-  labels = {
-    pool = "on-demand"
-  }
+  labels = { pool = "on-demand" }
 
-  update_config {
-    max_unavailable = 1
-  }
+  update_config { max_unavailable = 1 }
 
   depends_on = [
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
