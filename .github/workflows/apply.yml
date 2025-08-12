@@ -1,11 +1,19 @@
-name: Apply EKS
+name: Apply EKS (dir)
 on:
   workflow_dispatch:
     inputs:
+      tf_dir:
+        description: 'Terraform directory to apply (relative to repo root)'
+        required: true
+        default: 'terraform'
       tf_vars:
-        description: 'Extra TF -var values (key=value,space-separated)'
+        description: 'Extra TF -var values (key=value, space-separated)'
         required: false
         default: ''
+concurrency:
+  group: tf-apply-${{ github.ref }}-${{ github.event.inputs.tf_dir || 'terraform' }}
+  cancel-in-progress: false
+
 jobs:
   apply:
     runs-on: ubuntu-latest
@@ -16,14 +24,22 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
       TF_BACKEND_TABLE:  ${{ secrets.TF_BACKEND_TABLE }}
-      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}
+      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}   # Can be a full key OR a prefix
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve directory
+        id: dir
+        shell: bash
+        run: |
+          TF_DIR="${{ github.event.inputs.tf_dir || 'terraform' }}"
+          echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
+          test -d "$TF_DIR" || { echo "Directory '$TF_DIR' not found"; exit 1; }
 
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}   # MUST be a full ARN
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
@@ -31,20 +47,37 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      - name: Terraform Init
-        working-directory: terraform
+      - name: Compute backend key
+        shell: bash
         run: |
-          terraform init             -backend-config="bucket=$TF_BACKEND_BUCKET"             -backend-config="key=$TF_BACKEND_KEY"             -backend-config="region=$AWS_REGION"             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
+          # If TF_BACKEND_KEY ends with .tfstate, use as-is; otherwise treat it as a prefix
+          if [[ "$TF_BACKEND_KEY" == *.tfstate ]]; then
+            echo "BACKEND_KEY=$TF_BACKEND_KEY" >> "$GITHUB_ENV"
+          else
+            echo "BACKEND_KEY=${TF_BACKEND_KEY%/}/${TF_DIR}/terraform.tfstate" >> "$GITHUB_ENV"
+          fi
+          echo "Using backend key: $BACKEND_KEY"
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=$TF_BACKEND_BUCKET" \
+            -backend-config="key=$BACKEND_KEY" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
       - name: Terraform Validate
-        working-directory: terraform
+        working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
       - name: Terraform Plan
-        working-directory: terraform
+        working-directory: ${{ env.TF_DIR }}
         run: |
-          terraform plan -out=tfplan             -var "region=$AWS_REGION"             ${{ github.event.inputs.tf_vars }}
+          terraform plan -out=tfplan \
+            -var "region=$AWS_REGION" \
+            ${{ github.event.inputs.tf_vars }}
 
       - name: Terraform Apply
-        working-directory: terraform
+        working-directory: ${{ env.TF_DIR }}
         run: terraform apply -auto-approve tfplan
