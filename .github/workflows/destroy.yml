@@ -6,11 +6,11 @@ on:
         description: 'Extra TF -var values (key=value,space-separated)'
         required: false
         default: ''
+
 jobs:
   destroy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -20,10 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS (OIDC)
+      - name: Configure AWS (Access Keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
@@ -34,9 +35,15 @@ jobs:
       - name: Terraform Init
         working-directory: terraform
         run: |
-          terraform init             -backend-config="bucket=$TF_BACKEND_BUCKET"             -backend-config="key=$TF_BACKEND_KEY"             -backend-config="region=$AWS_REGION"             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
+          terraform init \
+            -backend-config="bucket=$TF_BACKEND_BUCKET" \
+            -backend-config="key=$TF_BACKEND_KEY" \
+            -backend-config="region=$AWS_REGION" \
+            -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
       - name: Terraform Destroy
         working-directory: terraform
         run: |
-          terraform destroy -auto-approve             -var "region=$AWS_REGION"             ${{ github.event.inputs.tf_vars }}
+          terraform destroy -auto-approve \
+            -var "region=$AWS_REGION" \
+            ${{ github.event.inputs.tf_vars }}
