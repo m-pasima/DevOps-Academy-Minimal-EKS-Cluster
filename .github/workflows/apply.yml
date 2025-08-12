@@ -1,9 +1,9 @@
-name: Apply EKS (dir)
+name: Apply EKS (dir, IAM user)
 on:
   workflow_dispatch:
     inputs:
       tf_dir:
-        description: 'Terraform directory to apply (relative to repo root)'
+        description: 'Terraform directory to apply'
         required: true
         default: 'terraform'
       tf_vars:
@@ -12,35 +12,32 @@ on:
         default: ''
 concurrency:
   group: tf-apply-${{ github.ref }}-${{ github.event.inputs.tf_dir || 'terraform' }}
-  cancel-in-progress: false
 
 jobs:
   apply:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
       TF_BACKEND_TABLE:  ${{ secrets.TF_BACKEND_TABLE }}
-      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}   # Can be a full key OR a prefix
+      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure AWS (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
       - name: Resolve directory
-        id: dir
-        shell: bash
         run: |
           TF_DIR="${{ github.event.inputs.tf_dir || 'terraform' }}"
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
           test -d "$TF_DIR" || { echo "Directory '$TF_DIR' not found"; exit 1; }
-
-      - name: Configure AWS (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}   # MUST be a full ARN
-          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -48,15 +45,12 @@ jobs:
           terraform_version: 1.8.5
 
       - name: Compute backend key
-        shell: bash
         run: |
-          # If TF_BACKEND_KEY ends with .tfstate, use as-is; otherwise treat it as a prefix
-          if [[ "$TF_BACKEND_KEY" == *.tfstate ]]; then
+          if [[ "${TF_BACKEND_KEY}" == *.tfstate ]]; then
             echo "BACKEND_KEY=$TF_BACKEND_KEY" >> "$GITHUB_ENV"
           else
-            echo "BACKEND_KEY=${TF_BACKEND_KEY%/}/${TF_DIR}/terraform.tfstate" >> "$GITHUB_ENV"
+            echo "BACKEND_KEY=${TF_BACKEND_KEY%/}/${{ env.TF_DIR }}/terraform.tfstate" >> "$GITHUB_ENV"
           fi
-          echo "Using backend key: $BACKEND_KEY"
 
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
@@ -81,3 +75,4 @@ jobs:
       - name: Terraform Apply
         working-directory: ${{ env.TF_DIR }}
         run: terraform apply -auto-approve tfplan
+
