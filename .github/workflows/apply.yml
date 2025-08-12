@@ -1,0 +1,50 @@
+name: Apply EKS
+on:
+  workflow_dispatch:
+    inputs:
+      tf_vars:
+        description: 'Extra TF -var values (key=value,space-separated)'
+        required: false
+        default: ''
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
+      TF_BACKEND_TABLE:  ${{ secrets.TF_BACKEND_TABLE }}
+      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          terraform init             -backend-config="bucket=$TF_BACKEND_BUCKET"             -backend-config="key=$TF_BACKEND_KEY"             -backend-config="region=$AWS_REGION"             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          terraform plan -out=tfplan             -var "region=$AWS_REGION"             ${{ github.event.inputs.tf_vars }}
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: terraform apply -auto-approve tfplan
