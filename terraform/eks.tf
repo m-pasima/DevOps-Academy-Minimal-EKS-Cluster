@@ -1,3 +1,7 @@
+############################################
+# EKS Control Plane + Two Node Groups
+############################################
+
 # Cluster role
 resource "aws_iam_role" "cluster" {
   name = "${var.project_name}-cluster-role"
@@ -6,7 +10,7 @@ resource "aws_iam_role" "cluster" {
     Statement = [{
       Effect = "Allow",
       Principal = { Service = "eks.amazonaws.com" },
-      Action = "sts:AssumeRole"
+      Action   = "sts:AssumeRole"
     }]
   })
 }
@@ -16,13 +20,30 @@ resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-# Security group for API (open for teaching—lock down in prod)
+# Cluster security group
 resource "aws_security_group" "cluster" {
-  name   = "${var.project_name}-cluster-sg"
-  vpc_id = aws_vpc.this.id
+  name        = "${var.project_name}-cluster-sg"
+  description = "EKS cluster security group"
+  vpc_id      = aws_vpc.this.id
 
-  ingress { from_port=443 to_port=443 protocol="tcp" cidr_blocks=["0.0.0.0/0"] }
-  egress  { from_port=0   to_port=0   protocol="-1"  cidr_blocks=["0.0.0.0/0"] }
+  ingress {
+    description = "K8s API"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-cluster-sg"
+  }
 }
 
 resource "aws_eks_cluster" "this" {
@@ -37,7 +58,9 @@ resource "aws_eks_cluster" "this" {
     subnet_ids              = [for s in aws_subnet.public : s.id]
   }
 
-  depends_on = [aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy]
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy
+  ]
 }
 
 # Node role (shared by both groups)
@@ -48,7 +71,7 @@ resource "aws_iam_role" "node" {
     Statement = [{
       Effect = "Allow",
       Principal = { Service = "ec2.amazonaws.com" },
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
 }
@@ -57,20 +80,32 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEKSWorkerNodePolicy" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 }
+
 resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOnly" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
+
 resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
-# Node SG
+# Node security group
 resource "aws_security_group" "node" {
   name   = "${var.project_name}-node-sg"
   vpc_id = aws_vpc.this.id
-  egress { from_port=0 to_port=0 protocol="-1" cidr_blocks=["0.0.0.0/0"] }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.project_name}-node-sg"
+  }
 }
 
 # ------------------- Node Group A (SPOT) -------------------
@@ -80,8 +115,8 @@ resource "aws_eks_node_group" "spot" {
   node_role_arn   = aws_iam_role.node.arn
   subnet_ids      = [for s in aws_subnet.public : s.id]
 
-  capacity_type   = "SPOT"
-  instance_types  = var.spot_instance_types
+  capacity_type  = "SPOT"
+  instance_types = var.spot_instance_types
 
   scaling_config {
     desired_size = var.spot_desired_size
@@ -93,7 +128,9 @@ resource "aws_eks_node_group" "spot" {
     pool = "spot"
   }
 
-  update_config { max_unavailable = 1 }
+  update_config {
+    max_unavailable = 1
+  }
 
   depends_on = [
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
@@ -109,8 +146,8 @@ resource "aws_eks_node_group" "on_demand" {
   node_role_arn   = aws_iam_role.node.arn
   subnet_ids      = [for s in aws_subnet.public : s.id]
 
-  capacity_type   = "ON_DEMAND"
-  instance_types  = var.od_instance_types
+  capacity_type  = "ON_DEMAND"
+  instance_types = var.od_instance_types
 
   scaling_config {
     desired_size = var.od_desired_size
@@ -122,7 +159,9 @@ resource "aws_eks_node_group" "on_demand" {
     pool = "on-demand"
   }
 
-  update_config { max_unavailable = 1 }
+  update_config {
+    max_unavailable = 1
+  }
 
   depends_on = [
     aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
@@ -130,7 +169,3 @@ resource "aws_eks_node_group" "on_demand" {
     aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy
   ]
 }
-
-output "cluster_name"     { value = aws_eks_cluster.this.name }
-output "cluster_endpoint" { value = aws_eks_cluster.this.endpoint }
-output "cluster_ca"       { value = aws_eks_cluster.this.certificate_authority[0].data }
