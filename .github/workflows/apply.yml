@@ -89,8 +89,6 @@ jobs:
             --table-name "$TF_BACKEND_TABLE" \
             --key "{\"LockID\":{\"S\":\"${BACKEND_KEY}\"}}" \
             --output json || true)"
-
-          # If there is no item, nothing to do
           echo "$ROW_JSON" | jq -e '.Item' >/dev/null 2>&1 || { echo "No existing lock row."; exit 0; }
 
           CREATED="$(echo "$ROW_JSON" | jq -r '.Item.Created.S // empty')"
@@ -99,7 +97,6 @@ jobs:
           echo "Existing lock → Who=${WHO} Operation=${OP} Created=${CREATED}"
 
           if [ -n "$CREATED" ]; then
-            # Linux date, with macOS fallback (not used on Actions, but harmless)
             CREATED_S=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M:%S %z" "$CREATED" +%s 2>/dev/null || echo 0)
             NOW_S=$(date +%s)
             AGE=$(( NOW_S - CREATED_S ))
@@ -154,4 +151,5 @@ jobs:
         run: |
           set -euo pipefail
           terraform apply -lock-timeout=5m -auto-approve tfplan
+
 
