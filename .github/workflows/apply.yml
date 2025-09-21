@@ -12,7 +12,7 @@ on:
         required: false
         default: ''
       force_unlock:
-        description: 'Force-unlock backend lock for this state before running (true/false)'
+        description: 'Force-unlock the DynamoDB lock row before running (true/false)'
         required: false
         default: 'false'
 
@@ -41,7 +41,9 @@ jobs:
           aws-region:            ${{ env.AWS_REGION }}
 
       - name: Resolve directory
+        shell: bash
         run: |
+          set -euo pipefail
           TF_DIR="${{ github.event.inputs.tf_dir || 'terraform' }}"
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
           test -d "$TF_DIR" || { echo "Directory '$TF_DIR' not found"; exit 1; }
@@ -52,66 +54,74 @@ jobs:
           terraform_version: 1.8.5
 
       - name: Compute backend key
+        id: key
+        shell: bash
         run: |
+          set -euo pipefail
           if [[ "${TF_BACKEND_KEY}" == *.tfstate ]]; then
             echo "BACKEND_KEY=${TF_BACKEND_KEY}" >> "$GITHUB_ENV"
           else
-            # ensure exactly one slash between prefix and tf_dir
             PREFIX="${TF_BACKEND_KEY%/}"
             echo "BACKEND_KEY=${PREFIX}/${{ env.TF_DIR }}/terraform.tfstate" >> "$GITHUB_ENV"
           fi
-          echo "Using BACKEND_KEY=${BACKEND_KEY:-unset}"
+          echo "Using TF_BACKEND_TABLE=${TF_BACKEND_TABLE}"
+          echo "Using BACKEND_KEY=${BACKEND_KEY}"
 
-      # ---------- OPTIONAL GUARDS ----------
+      # ---------- Preflight lock handling ----------
 
       - name: (Optional) Force unlock on request
         if: ${{ github.event.inputs.force_unlock == 'true' }}
+        shell: bash
         run: |
           set -euo pipefail
-          echo "Force-unlocking DynamoDB lock for key: $BACKEND_KEY"
+          echo "Force-unlocking DynamoDB lock row: table=$TF_BACKEND_TABLE LockID=$BACKEND_KEY"
           aws dynamodb delete-item \
             --table-name "$TF_BACKEND_TABLE" \
-            --key "{\"LockID\": {\"S\": \"${BACKEND_KEY}\"}}" || true
+            --key "{\"LockID\":{\"S\":\"${BACKEND_KEY}\"}}" \
+            --condition-expression "attribute_exists(LockID)" || true
 
       - name: (Optional) Auto-unlock stale locks (>15m)
         if: ${{ github.event.inputs.force_unlock != 'true' }}
+        shell: bash
         run: |
           set -euo pipefail
           ROW_JSON="$(aws dynamodb get-item \
             --table-name "$TF_BACKEND_TABLE" \
-            --key "{\"LockID\": {\"S\": \"${BACKEND_KEY}\"}}" \
+            --key "{\"LockID\":{\"S\":\"${BACKEND_KEY}\"}}" \
             --output json || true)"
 
-          # If no Item, nothing to do
-          echo "$ROW_JSON" | jq -e '.Item' >/dev/null 2>&1 || { echo "No existing lock."; exit 0; }
+          # If there is no item, nothing to do
+          echo "$ROW_JSON" | jq -e '.Item' >/dev/null 2>&1 || { echo "No existing lock row."; exit 0; }
 
           CREATED="$(echo "$ROW_JSON" | jq -r '.Item.Created.S // empty')"
           WHO="$(echo "$ROW_JSON" | jq -r '.Item.Who.S // empty')"
           OP="$(echo "$ROW_JSON" | jq -r '.Item.Operation.S // empty')"
-          echo "Found lock: Who=${WHO} Operation=${OP} Created=${CREATED}"
+          echo "Existing lock → Who=${WHO} Operation=${OP} Created=${CREATED}"
 
-          # Consider stale if older than 15 minutes
           if [ -n "$CREATED" ]; then
+            # Linux date, with macOS fallback (not used on Actions, but harmless)
             CREATED_S=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M:%S %z" "$CREATED" +%s 2>/dev/null || echo 0)
             NOW_S=$(date +%s)
             AGE=$(( NOW_S - CREATED_S ))
             if [ "$AGE" -gt 900 ]; then
-              echo "Lock is stale (${AGE}s old) -> deleting"
+              echo "Lock is stale (${AGE}s old) → deleting row"
               aws dynamodb delete-item \
                 --table-name "$TF_BACKEND_TABLE" \
-                --key "{\"LockID\": {\"S\": \"${BACKEND_KEY}\"}}"
+                --key "{\"LockID\":{\"S\":\"${BACKEND_KEY}\"}}"
             else
-              echo "Lock exists but is fresh (${AGE}s). Will rely on Terraform -lock-timeout."
+              echo "Lock exists but is fresh (${AGE}s). Terraform will wait with -lock-timeout."
             fi
           else
-            echo "No parsable Created timestamp. Skipping auto-delete."
+            echo "No parsable Created timestamp; skipping auto-delete."
           fi
 
-      # ---------- TERRAFORM RUN ----------
+      # ---------- Terraform run ----------
 
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
+        shell: bash
         run: |
+          set -euo pipefail
           terraform init \
             -backend-config="bucket=$TF_BACKEND_BUCKET" \
             -backend-config="key=$BACKEND_KEY" \
@@ -126,8 +136,9 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_IN_AUTOMATION: true
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
           terraform plan \
             -lock-timeout=5m \
             -input=false \
@@ -139,6 +150,8 @@ jobs:
         working-directory: ${{ env.TF_DIR }}
         env:
           TF_IN_AUTOMATION: true
+        shell: bash
         run: |
+          set -euo pipefail
           terraform apply -lock-timeout=5m -auto-approve tfplan
 
