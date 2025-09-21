@@ -1,4 +1,5 @@
 name: Apply EKS (dir, IAM user)
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +11,11 @@ on:
         description: 'Extra TF -var values (key=value, space-separated)'
         required: false
         default: ''
+      force_unlock:
+        description: 'Force-unlock backend lock for this state before running (true/false)'
+        required: false
+        default: 'false'
+
 concurrency:
   group: tf-apply-${{ github.ref }}-${{ github.event.inputs.tf_dir || 'terraform' }}
 
@@ -19,10 +25,11 @@ jobs:
     permissions:
       contents: read
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
-      TF_BACKEND_TABLE:  ${{ secrets.TF_BACKEND_TABLE }}
-      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}
+      AWS_REGION:         ${{ secrets.AWS_REGION }}
+      TF_BACKEND_BUCKET:  ${{ secrets.TF_BACKEND_BUCKET }}
+      TF_BACKEND_TABLE:   ${{ secrets.TF_BACKEND_TABLE }}
+      TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -47,10 +54,60 @@ jobs:
       - name: Compute backend key
         run: |
           if [[ "${TF_BACKEND_KEY}" == *.tfstate ]]; then
-            echo "BACKEND_KEY=$TF_BACKEND_KEY" >> "$GITHUB_ENV"
+            echo "BACKEND_KEY=${TF_BACKEND_KEY}" >> "$GITHUB_ENV"
           else
-            echo "BACKEND_KEY=${TF_BACKEND_KEY%/}/${{ env.TF_DIR }}/terraform.tfstate" >> "$GITHUB_ENV"
+            # ensure exactly one slash between prefix and tf_dir
+            PREFIX="${TF_BACKEND_KEY%/}"
+            echo "BACKEND_KEY=${PREFIX}/${{ env.TF_DIR }}/terraform.tfstate" >> "$GITHUB_ENV"
           fi
+          echo "Using BACKEND_KEY=${BACKEND_KEY:-unset}"
+
+      # ---------- OPTIONAL GUARDS ----------
+
+      - name: (Optional) Force unlock on request
+        if: ${{ github.event.inputs.force_unlock == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "Force-unlocking DynamoDB lock for key: $BACKEND_KEY"
+          aws dynamodb delete-item \
+            --table-name "$TF_BACKEND_TABLE" \
+            --key "{\"LockID\": {\"S\": \"${BACKEND_KEY}\"}}" || true
+
+      - name: (Optional) Auto-unlock stale locks (>15m)
+        if: ${{ github.event.inputs.force_unlock != 'true' }}
+        run: |
+          set -euo pipefail
+          ROW_JSON="$(aws dynamodb get-item \
+            --table-name "$TF_BACKEND_TABLE" \
+            --key "{\"LockID\": {\"S\": \"${BACKEND_KEY}\"}}" \
+            --output json || true)"
+
+          # If no Item, nothing to do
+          echo "$ROW_JSON" | jq -e '.Item' >/dev/null 2>&1 || { echo "No existing lock."; exit 0; }
+
+          CREATED="$(echo "$ROW_JSON" | jq -r '.Item.Created.S // empty')"
+          WHO="$(echo "$ROW_JSON" | jq -r '.Item.Who.S // empty')"
+          OP="$(echo "$ROW_JSON" | jq -r '.Item.Operation.S // empty')"
+          echo "Found lock: Who=${WHO} Operation=${OP} Created=${CREATED}"
+
+          # Consider stale if older than 15 minutes
+          if [ -n "$CREATED" ]; then
+            CREATED_S=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%d %H:%M:%S %z" "$CREATED" +%s 2>/dev/null || echo 0)
+            NOW_S=$(date +%s)
+            AGE=$(( NOW_S - CREATED_S ))
+            if [ "$AGE" -gt 900 ]; then
+              echo "Lock is stale (${AGE}s old) -> deleting"
+              aws dynamodb delete-item \
+                --table-name "$TF_BACKEND_TABLE" \
+                --key "{\"LockID\": {\"S\": \"${BACKEND_KEY}\"}}"
+            else
+              echo "Lock exists but is fresh (${AGE}s). Will rely on Terraform -lock-timeout."
+            fi
+          else
+            echo "No parsable Created timestamp. Skipping auto-delete."
+          fi
+
+      # ---------- TERRAFORM RUN ----------
 
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
@@ -67,12 +124,21 @@ jobs:
 
       - name: Terraform Plan
         working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_IN_AUTOMATION: true
         run: |
-          terraform plan -out=tfplan \
+          set -e
+          terraform plan \
+            -lock-timeout=5m \
+            -input=false \
+            -out=tfplan \
             -var "region=$AWS_REGION" \
             ${{ github.event.inputs.tf_vars }}
 
       - name: Terraform Apply
         working-directory: ${{ env.TF_DIR }}
-        run: terraform apply -auto-approve tfplan
+        env:
+          TF_IN_AUTOMATION: true
+        run: |
+          terraform apply -lock-timeout=5m -auto-approve tfplan
 
