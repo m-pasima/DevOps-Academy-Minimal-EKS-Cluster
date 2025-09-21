@@ -1,10 +1,10 @@
-name: Terraform Unlock
+name: Terraform Unlock (by tf_dir)
 
 on:
   workflow_dispatch:
     inputs:
       tf_dir:
-        description: 'Terraform directory'
+        description: 'Terraform directory (same as in Apply workflow)'
         required: true
         default: 'terraform'
 
@@ -12,31 +12,40 @@ jobs:
   unlock:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION:         ${{ secrets.AWS_REGION }}
-      TF_BACKEND_BUCKET:  ${{ secrets.TF_BACKEND_BUCKET }}
-      TF_BACKEND_TABLE:   ${{ secrets.TF_BACKEND_TABLE }}
-      TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
+      AWS_REGION:        ${{ secrets.AWS_REGION }}
+      TF_BACKEND_TABLE:  ${{ secrets.TF_BACKEND_TABLE }}
+      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Compute backend key
+      - name: Compute BACKEND_KEY (same logic as Apply)
+        shell: bash
         run: |
           TF_DIR="${{ github.event.inputs.tf_dir }}"
           if [[ "${TF_BACKEND_KEY}" == *.tfstate ]]; then
-            echo "BACKEND_KEY=${TF_BACKEND_KEY}" >> "$GITHUB_ENV"
+            BACKEND_KEY="${TF_BACKEND_KEY}"
           else
-            echo "BACKEND_KEY=${TF_BACKEND_KEY%/}/${TF_DIR}/terraform.tfstate" >> "$GITHUB_ENV"
+            BACKEND_KEY="${TF_BACKEND_KEY%/}/${TF_DIR}/terraform.tfstate"
           fi
-          echo "BACKEND_KEY=$BACKEND_KEY"
+          echo "BACKEND_KEY=$BACKEND_KEY" | tee -a "$GITHUB_ENV"
 
-      - name: Delete lock row
+      - name: Show and delete lock row
+        shell: bash
         run: |
+          echo "Table: $TF_BACKEND_TABLE"
+          echo "LockID: $BACKEND_KEY"
+          aws dynamodb get-item \
+            --table-name "$TF_BACKEND_TABLE" \
+            --key "{\"LockID\":{\"S\":\"${BACKEND_KEY}\"}}"
           aws dynamodb delete-item \
             --table-name "$TF_BACKEND_TABLE" \
             --key "{\"LockID\":{\"S\":\"${BACKEND_KEY}\"}}" \
             --condition-expression "attribute_exists(LockID)" || true
+          echo "Unlock done."
