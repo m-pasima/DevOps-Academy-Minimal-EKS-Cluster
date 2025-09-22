@@ -6,7 +6,7 @@ variable "project_name" {
 
 variable "region" {
   type        = string
-  default     = "eu-west-2" # change if needed
+  default     = "eu-west-2"
   description = "AWS region"
 }
 
@@ -60,8 +60,8 @@ variable "od_max_size" {
   default = 1
 }
 
-# If you use the modern EKS Access Entries from earlier:
+# Who gets cluster-admin via EKS Access Entry
 variable "admin_principal_arn" {
   type        = string
-  description = "IAM user/role ARN to grant cluster-admin via EKS Access Entry"
+  description = "IAM user/role ARN to grant cluster-admin"
 }
