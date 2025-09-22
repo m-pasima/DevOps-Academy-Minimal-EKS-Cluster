@@ -27,14 +27,11 @@ jobs:
       TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
 
     steps:
+      # Ensure we do NOT reuse a dirty workspace
       - uses: actions/checkout@v4
-
-      - name: Configure AWS (keys)
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            ${{ env.AWS_REGION }}
+          fetch-depth: 0
+          clean: true
 
       - name: Resolve directory
         shell: bash
@@ -42,12 +39,41 @@ jobs:
           set -euo pipefail
           TF_DIR="${{ github.event.inputs.tf_dir || 'terraform' }}"
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
-          test -d "$TF_DIR" || { echo "Directory '$TF_DIR' not found"; exit 1; }
+          test -d "$TF_DIR" || { echo "❌ Directory '$TF_DIR' not found"; exit 1; }
+
+      - name: Show TF files we are about to run
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== PWD ==="
+          pwd
+          echo "=== List TF_DIR ==="
+          ls -la "$TF_DIR"
+          echo "=== variables.tf (first 120 lines) ==="
+          sed -n '1,120p' "$TF_DIR/variables.tf" || true
+          echo "=== Count of terraform{} blocks across TF_DIR ==="
+          grep -R --line-number 'terraform *{' "$TF_DIR" || true
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
+
+      # Fail fast on formatting/syntax BEFORE init/backends
+      - name: Terraform Fmt & Validate (fail fast)
+        working-directory: ${{ env.TF_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform fmt -check -recursive
+          terraform validate
+
+      - name: Configure AWS (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       - name: Compute backend key
         shell: bash
@@ -60,6 +86,7 @@ jobs:
             BACKEND_KEY="${PREFIX}/${{ env.TF_DIR }}/terraform.tfstate"
           fi
           echo "BACKEND_KEY=$BACKEND_KEY" >> "$GITHUB_ENV"
+          echo "Using BACKEND_KEY=$BACKEND_KEY"
 
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
@@ -71,10 +98,17 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
-      - name: Terraform Validate
-        working-directory: ${{ env.TF_DIR }}
+      - name: Build -var args from tf_vars
+        id: varargs
         shell: bash
-        run: terraform validate
+        run: |
+          set -euo pipefail
+          VAR_ARGS=()
+          read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
+          for w in "${WORDS[@]}"; do
+            [[ -n "$w" ]] && VAR_ARGS+=("-var" "$w")
+          done
+          printf '%s\0' "${VAR_ARGS[@]}" > var_args.null
 
       - name: Terraform Plan
         working-directory: ${{ env.TF_DIR }}
@@ -82,11 +116,7 @@ jobs:
           TF_IN_AUTOMATION: true
         shell: bash
         run: |
-          VAR_ARGS=()
-          read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
-          for w in "${WORDS[@]}"; do
-            [[ -n "$w" ]] && VAR_ARGS+=("-var" "$w")
-          done
+          mapfile -d '' VAR_ARGS < ../var_args.null || true
           terraform plan \
             -lock-timeout=5m \
             -input=false \
@@ -100,5 +130,3 @@ jobs:
           TF_IN_AUTOMATION: true
         shell: bash
         run: terraform apply -lock-timeout=5m -auto-approve tfplan
-
-
