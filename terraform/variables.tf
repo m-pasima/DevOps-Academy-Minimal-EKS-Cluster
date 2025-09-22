@@ -6,7 +6,7 @@ variable "project_name" {
 
 variable "region" {
   type        = string
-  default     = "eu-west-2"
+  default     = "eu-west-2" # change if needed
   description = "AWS region"
 }
 
@@ -22,9 +22,21 @@ variable "spot_instance_types" {
   default     = ["t3.small"]
   description = "Instance types for the SPOT group"
 }
-variable "spot_min_size"     { type = number, default = 1 }
-variable "spot_desired_size" { type = number, default = 1 }
-variable "spot_max_size"     { type = number, default = 1 }
+
+variable "spot_min_size" {
+  type    = number
+  default = 1
+}
+
+variable "spot_desired_size" {
+  type    = number
+  default = 1
+}
+
+variable "spot_max_size" {
+  type    = number
+  default = 1
+}
 
 # On-demand node group sizing (group B)
 variable "od_instance_types" {
@@ -32,12 +44,24 @@ variable "od_instance_types" {
   default     = ["t3.small"]
   description = "Instance types for the ON_DEMAND group"
 }
-variable "od_min_size"     { type = number, default = 1 }
-variable "od_desired_size" { type = number, default = 1 }
-variable "od_max_size"     { type = number, default = 1 }
 
-# NEW: who should be cluster-admin via EKS Access Entry
+variable "od_min_size" {
+  type    = number
+  default = 1
+}
+
+variable "od_desired_size" {
+  type    = number
+  default = 1
+}
+
+variable "od_max_size" {
+  type    = number
+  default = 1
+}
+
+# If you use the modern EKS Access Entries from earlier:
 variable "admin_principal_arn" {
   type        = string
-  description = "IAM user/role ARN to grant cluster-admin"
+  description = "IAM user/role ARN to grant cluster-admin via EKS Access Entry"
 }
