@@ -1,0 +1,30 @@
+# === Terraform core ===
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# === Terraform working dirs ===
+.terraform/
+.terraform/*
+
+# === Terraform plan files ===
+*.tfplan
+*.plan
+
+# === Local environment files ===
+.terraform.lock.hcl
+*.tfvars
+*.tfvars.json
+
+# === Editor / OS junk ===
+# (optional, but good hygiene)
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

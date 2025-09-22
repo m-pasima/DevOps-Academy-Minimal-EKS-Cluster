@@ -113,17 +113,17 @@ resource "aws_security_group_rule" "node_in_from_self_all" {
   self              = true
 }
 
- # Optional: External access to NodePorts (prefer ALB/NLB instead)
- 
- resource "aws_security_group_rule" "node_in_nodeports_optional" {
-   type              = "ingress"
-   description       = "NodePort range (optional)"
-   from_port         = 30000
-   to_port           = 32767
-   protocol          = "tcp"
-   security_group_id = aws_security_group.node.id
-   cidr_blocks       = ["0.0.0.0/0"]
- }
+# Optional: External access to NodePorts (prefer ALB/NLB instead)
+
+resource "aws_security_group_rule" "node_in_nodeports_optional" {
+  type              = "ingress"
+  description       = "NodePort range (optional)"
+  from_port         = 30000
+  to_port           = 32767
+  protocol          = "tcp"
+  security_group_id = aws_security_group.node.id
+  cidr_blocks       = ["0.0.0.0/0"]
+}
 
 # EKS Cluster
 resource "aws_eks_cluster" "this" {
@@ -172,7 +172,7 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
 
 # Launch Template to ATTACH OUR NODE SG to managed node groups
 resource "aws_launch_template" "nodes" {
-  name_prefix   = "${var.project_name}-ng-"
+  name_prefix            = "${var.project_name}-ng-"
   update_default_version = true
 
   # We don't set AMI or user_data: EKS MNG will inject its own AMI/settings.

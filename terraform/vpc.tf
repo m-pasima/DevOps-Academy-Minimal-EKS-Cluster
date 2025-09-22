@@ -29,8 +29,8 @@ resource "aws_subnet" "public" {
   # - elb tag marks these as "public" for classic/NLB/ALB controller
   # - cluster tag allows the AWS LB Controller / k8s to discover usable subnets
   tags = {
-    Name                                           = "${var.project_name}-public-${each.key}"
-    "kubernetes.io/role/elb"                       = "1"
+    Name                                                = "${var.project_name}-public-${each.key}"
+    "kubernetes.io/role/elb"                            = "1"
     "kubernetes.io/cluster/${var.project_name}-cluster" = "shared"
   }
 }
