@@ -60,7 +60,7 @@ variable "od_max_size" {
   default = 1
 }
 
-# Who gets cluster-admin via EKS Access Entry
+# IAM principal to grant cluster-admin via EKS Access Entry
 variable "admin_principal_arn" {
   type        = string
   description = "IAM user/role ARN to grant cluster-admin"
