@@ -49,19 +49,21 @@ jobs:
         with:
           terraform_version: 1.8.5
 
+      # Provider-only init so validate has schemas (no backend touch yet)
       - name: Terraform Init (providers only, no backend)
         shell: bash
         run: |
           set -euo pipefail
-          terraform -chdir="${{ env.TF_DIR }}" init -input=false -backend=false -upgrade
+          terraform -chdir="${{ env.TF_DIR }}" init -backend=false -input=false -upgrade
           sed -n '1,80p' "${{ env.TF_DIR }}/.terraform.lock.hcl" || true
 
       - name: Terraform Validate
         shell: bash
         run: |
           set -euo pipefail
-          terraform -chdir="${{ env.TF_DIR }}" validate
+          terraform -chdir="${{ env.TF_DIR }}" validate -no-color
 
+      # Real backend init, then plan/apply
       - name: Configure AWS (keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -90,12 +92,14 @@ jobs:
             -backend-config="bucket=$TF_BACKEND_BUCKET" \
             -backend-config="key=$BACKEND_KEY" \
             -backend-config="region=$AWS_REGION" \
-            -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
+            -backend-config="dynamodb_table=$TF_BACKEND_TABLE" \
+            -input=false -no-color
 
       - name: Derive cluster name and admin_principal_arn, export TF_VARs
         shell: bash
         run: |
           set -euo pipefail
+          # Default project_name; allow override from tf_vars
           PROJECT_NAME="teaching-eks"
           for tok in ${{ github.event.inputs.tf_vars }}; do
             if [[ "$tok" == project_name=* ]]; then
@@ -121,7 +125,7 @@ jobs:
             echo "PROJECT_NAME=$PROJECT_NAME"
             echo "CLUSTER=$CLUSTER"
             echo "ADMIN=$ADMIN"
-            # Critical: make imports non-interactive by providing vars via env
+            # Make *any* Terraform command non-interactive:
             echo "TF_VAR_admin_principal_arn=$ADMIN"
             echo "TF_VAR_region=$AWS_REGION"
             echo "TF_VAR_project_name=$PROJECT_NAME"
@@ -130,29 +134,31 @@ jobs:
           echo "Resolved: CLUSTER=$CLUSTER"
           echo "Resolved: admin_principal_arn=$ADMIN"
 
-      - name: Import EKS Access Entry (idempotent, non-interactive)
+      # Import access entry & policy assoc with lock timeouts (idempotent, non-interactive)
+      - name: Reconcile EKS Access Entry & Policy Association
         shell: bash
         run: |
           set -euo pipefail
-          if ! terraform -chdir="${{ env.TF_DIR }}" state list | grep -q '^aws_eks_access_entry\.admin$'; then
-            echo "Attempting import of aws_eks_access_entry.admin (${CLUSTER}:${ADMIN})"
-            terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
-              aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
+
+          echo "→ Checking/importing aws_eks_access_entry.admin"
+          if terraform -chdir="${{ env.TF_DIR }}" state show aws_eks_access_entry.admin -lock-timeout=5m -no-color >/dev/null 2>&1; then
+            echo "  • Access Entry already in state"
           else
-            echo "Access Entry already in state; skipping import."
+            echo "  • Importing Access Entry (${CLUSTER}:${ADMIN})"
+            terraform -chdir="${{ env.TF_DIR }}" import \
+              -input=false -no-color -lock-timeout=5m \
+              aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
           fi
 
-      - name: Import Access Policy Association (idempotent, non-interactive)
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "→ Checking/importing aws_eks_access_policy_association.admin_cluster_admin"
           ASSOC_ID="${CLUSTER}#${ADMIN}#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          if ! terraform -chdir="${{ env.TF_DIR }}" state list | grep -q '^aws_eks_access_policy_association\.admin_cluster_admin$'; then
-            echo "Attempting import of aws_eks_access_policy_association.admin_cluster_admin ($ASSOC_ID)"
-            terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
-              aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
+          if terraform -chdir="${{ env.TF_DIR }}" state show aws_eks_access_policy_association.admin_cluster_admin -lock-timeout=5m -no-color >/dev/null 2>&1; then
+            echo "  • Policy Association already in state"
           else
-            echo "Access Policy Association already in state; skipping import."
+            echo "  • Importing Policy Association ($ASSOC_ID)"
+            terraform -chdir="${{ env.TF_DIR }}" import \
+              -input=false -no-color -lock-timeout=5m \
+              aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
           fi
 
       - name: Terraform Plan
@@ -173,11 +179,12 @@ jobs:
           done
 
           terraform -chdir="${{ env.TF_DIR }}" plan \
-            -lock-timeout=5m \
+            -lock-timeout=10m \
             -input=false \
             -out=tfplan \
             -var "region=$AWS_REGION" \
             -var "admin_principal_arn=${ADMIN}" \
+            -no-color \
             "${VAR_ARGS[@]}"
 
       - name: Terraform Apply
@@ -186,4 +193,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=5m -auto-approve tfplan
+          terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=10m -auto-approve -no-color tfplan
+
