@@ -99,33 +99,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Default project_name; allow override from tf_vars
           PROJECT_NAME="teaching-eks"
           for tok in ${{ github.event.inputs.tf_vars }}; do
-            if [[ "$tok" == project_name=* ]]; then
-              PROJECT_NAME="${tok#project_name=}"
-            fi
+            if [[ "$tok" == project_name=* ]]; then PROJECT_NAME="${tok#project_name=}"; fi
           done
           CLUSTER="${PROJECT_NAME}-cluster"
 
           ARN="$(aws sts get-caller-identity --query Arn --output text)"
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-
           if [[ "$ARN" == *":user/"* ]]; then
             ADMIN="$ARN"
           elif [[ "$ARN" == *":assumed-role/"* ]]; then
             ROLE_NAME="$(echo "$ARN" | awk -F'/' '{print $2}')"
             ADMIN="arn:aws:iam::${ACCOUNT}:role/${ROLE_NAME}"
           else
-            echo "❌ Unsupported caller ARN for admin mapping: $ARN"
-            exit 1
+            echo "❌ Unsupported caller ARN for admin mapping: $ARN"; exit 1
           fi
 
           {
             echo "PROJECT_NAME=$PROJECT_NAME"
             echo "CLUSTER=$CLUSTER"
             echo "ADMIN=$ADMIN"
-            # Make *any* Terraform command non-interactive:
             echo "TF_VAR_admin_principal_arn=$ADMIN"
             echo "TF_VAR_region=$AWS_REGION"
             echo "TF_VAR_project_name=$PROJECT_NAME"
@@ -134,30 +128,30 @@ jobs:
           echo "Resolved: CLUSTER=$CLUSTER"
           echo "Resolved: admin_principal_arn=$ADMIN"
 
-      # Import access entry & policy assoc with lock timeouts (idempotent, non-interactive)
-      - name: Reconcile EKS Access Entry & Policy Association
+      # ---- CHANGED: use -lock=false so imports never wait on DynamoDB lock ----
+      - name: Reconcile EKS Access Entry & Policy Association (no lock)
         shell: bash
         run: |
           set -euo pipefail
 
           echo "→ Checking/importing aws_eks_access_entry.admin"
-          if terraform -chdir="${{ env.TF_DIR }}" state show aws_eks_access_entry.admin -lock-timeout=5m -no-color >/dev/null 2>&1; then
+          if terraform -chdir="${{ env.TF_DIR }}" state show aws_eks_access_entry.admin -lock=false -no-color >/dev/null 2>&1; then
             echo "  • Access Entry already in state"
           else
             echo "  • Importing Access Entry (${CLUSTER}:${ADMIN})"
             terraform -chdir="${{ env.TF_DIR }}" import \
-              -input=false -no-color -lock-timeout=5m \
+              -lock=false -input=false -no-color \
               aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
           fi
 
           echo "→ Checking/importing aws_eks_access_policy_association.admin_cluster_admin"
           ASSOC_ID="${CLUSTER}#${ADMIN}#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          if terraform -chdir="${{ env.TF_DIR }}" state show aws_eks_access_policy_association.admin_cluster_admin -lock-timeout=5m -no-color >/dev/null 2>&1; then
+          if terraform -chdir="${{ env.TF_DIR }}" state show aws_eks_access_policy_association.admin_cluster_admin -lock=false -no-color >/dev/null 2>&1; then
             echo "  • Policy Association already in state"
           else
             echo "  • Importing Policy Association ($ASSOC_ID)"
             terraform -chdir="${{ env.TF_DIR }}" import \
-              -input=false -no-color -lock-timeout=5m \
+              -lock=false -input=false -no-color \
               aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
           fi
 
@@ -172,8 +166,7 @@ jobs:
           for w in "${WORDS[@]:-}"; do
             [[ -z "$w" ]] && continue
             if [[ "$w" != *"="* ]]; then
-              echo "⚠️ Skipping invalid tf_vars token (no '='): $w"
-              continue
+              echo "⚠️ Skipping invalid tf_vars token (no '='): $w"; continue
             fi
             VAR_ARGS+=("-var" "$w")
           done
@@ -194,4 +187,5 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=10m -auto-approve -no-color tfplan
+
 
