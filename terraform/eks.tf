@@ -1,5 +1,5 @@
 ############################################
-# EKS Control Plane + Two Node Groups (FIXED)
+# EKS Control Plane + Two Node Groups
 ############################################
 
 # Cluster IAM role
@@ -114,7 +114,6 @@ resource "aws_security_group_rule" "node_in_from_self_all" {
 }
 
 # Optional: External access to NodePorts (prefer ALB/NLB instead)
-
 resource "aws_security_group_rule" "node_in_nodeports_optional" {
   type              = "ingress"
   description       = "NodePort range (optional)"
@@ -137,6 +136,14 @@ resource "aws_eks_cluster" "this" {
     security_group_ids      = [aws_security_group.cluster.id]
     subnet_ids              = [for s in aws_subnet.public : s.id]
   }
+
+  # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  # FIX: enable the Access Entries API so aws_eks_access_* works
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP" # or "API"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+  # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
   depends_on = [
     aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy,
@@ -175,8 +182,6 @@ resource "aws_launch_template" "nodes" {
   name_prefix            = "${var.project_name}-ng-"
   update_default_version = true
 
-  # We don't set AMI or user_data: EKS MNG will inject its own AMI/settings.
-  # We only want to control the NIC SGs.
   network_interfaces {
     security_groups = [aws_security_group.node.id]
   }
@@ -271,4 +276,3 @@ resource "aws_eks_access_policy_association" "admin_cluster_admin" {
   }
 }
 # END OF FILE
-
