@@ -7,12 +7,8 @@ on:
         description: 'Terraform directory to apply'
         required: true
         default: 'terraform'
-      admin_principal_arn:
-        description: 'IAM user/role ARN to grant cluster-admin (var.admin_principal_arn)'
-        required: false
-        default: ''
       tf_vars:
-        description: 'Extra TF -var values (key=value, space-separated)'
+        description: 'Extra TF -var values (key=value, space-separated). Example: project_name=teaching-eks cluster_version=1.29'
         required: false
         default: ''
 
@@ -44,19 +40,16 @@ jobs:
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
           test -d "$TF_DIR" || { echo "❌ Directory '$TF_DIR' not found"; exit 1; }
           echo "PWD=$(pwd)"
-          echo "=== ls $TF_DIR ==="
-          ls -la "$TF_DIR"
-          echo "=== head providers.tf ==="
-          sed -n '1,120p' "$TF_DIR/providers.tf" || true
-          echo "=== head variables.tf ==="
-          sed -n '1,120p' "$TF_DIR/variables.tf" || true
+          echo "=== ls $TF_DIR ==="; ls -la "$TF_DIR" || true
+          echo "=== providers.tf (head) ==="; sed -n '1,120p' "$TF_DIR/providers.tf" || true
+          echo "=== variables.tf (head) ==="; sed -n '1,120p' "$TF_DIR/variables.tf" || true
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
-      # Install providers WITHOUT backend so validate has schemas
+      # Install providers WITHOUT touching the backend (so validate has schemas)
       - name: Terraform Init (providers only, no backend)
         shell: bash
         run: |
@@ -101,25 +94,34 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
-      - name: Terraform Plan
-        env:
-          TF_IN_AUTOMATION: true
-          ADMIN_INPUT:  ${{ github.event.inputs.admin_principal_arn }}
-          ADMIN_SECRET: ${{ secrets.ADMIN_PRINCIPAL_ARN }}
+      - name: Derive admin_principal_arn from current credentials
+        id: admin
         shell: bash
         run: |
           set -euo pipefail
-
-          # Resolve admin_principal_arn (input wins, else secret)
-          ADMIN="${ADMIN_INPUT:-}"
-          if [[ -z "$ADMIN" ]]; then ADMIN="${ADMIN_SECRET:-}"; fi
-          if [[ -z "$ADMIN" ]]; then
-            echo "❌ var.admin_principal_arn is required. Provide it via workflow input or set secrets.ADMIN_PRINCIPAL_ARN."
+          ARN="$(aws sts get-caller-identity --query Arn --output text)"
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          if [[ "$ARN" == *":user/"* ]]; then
+            ADMIN="$ARN"
+          elif [[ "$ARN" == *":assumed-role/"* ]]; then
+            # arn:aws:sts::123456789012:assumed-role/RoleName/Session -> arn:aws:iam::123456789012:role/RoleName
+            ROLE_NAME="$(echo "$ARN" | awk -F'/' '{print $2}')"
+            ADMIN="arn:aws:iam::${ACCOUNT}:role/${ROLE_NAME}"
+          else
+            echo "❌ Unsupported caller ARN for admin mapping: $ARN"
             exit 1
           fi
+          echo "ADMIN=$ADMIN" >> "$GITHUB_ENV"
+          echo "Resolved admin_principal_arn=$ADMIN"
 
-          # Build extra -var args from tf_vars safely
+      - name: Terraform Plan
+        env:
+          TF_IN_AUTOMATION: true
+        shell: bash
+        run: |
+          set -euo pipefail
           VAR_ARGS=()
+          # Build extra -var args from tf_vars safely
           read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
           for w in "${WORDS[@]:-}"; do
             [[ -z "$w" ]] && continue
@@ -135,7 +137,7 @@ jobs:
             -input=false \
             -out=tfplan \
             -var "region=$AWS_REGION" \
-            -var "admin_principal_arn=$ADMIN" \
+            -var "admin_principal_arn=${ADMIN}" \
             "${VAR_ARGS[@]}"
 
       - name: Terraform Apply
@@ -145,5 +147,3 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=5m -auto-approve tfplan
-
-
