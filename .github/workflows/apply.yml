@@ -32,47 +32,38 @@ jobs:
           clean: true
           fetch-depth: 0
 
-      - name: Resolve directory
+      - name: Resolve directory & show files
         shell: bash
         run: |
           set -euo pipefail
           TF_DIR="${{ github.event.inputs.tf_dir || 'terraform' }}"
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
           test -d "$TF_DIR" || { echo "❌ Directory '$TF_DIR' not found"; exit 1; }
-
-      - name: Show files (sanity)
-        shell: bash
-        run: |
-          set -euo pipefail
           echo "PWD=$(pwd)"
-          echo "=== list ${{ env.TF_DIR }} ==="
-          ls -la "${{ env.TF_DIR }}"
+          echo "=== ls $TF_DIR ==="
+          ls -la "$TF_DIR"
           echo "=== head providers.tf ==="
-          sed -n '1,120p' "${{ env.TF_DIR }}/providers.tf" || true
+          sed -n '1,120p' "$TF_DIR/providers.tf" || true
           echo "=== head variables.tf ==="
-          sed -n '1,120p' "${{ env.TF_DIR }}/variables.tf" || true
+          sed -n '1,120p' "$TF_DIR/variables.tf" || true
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
-      # ---- Install providers WITHOUT touching the backend (required before validate) ----
+      # ---- Install providers WITHOUT backend (required before validate) ----
       - name: Terraform Init (providers only, no backend)
-        working-directory: ${{ env.TF_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-          terraform init -input=false -backend=false -upgrade
-          echo "=== .terraform.lock.hcl (first 60 lines) ==="
-          sed -n '1,60p' .terraform.lock.hcl || true
+          terraform -chdir="${{ env.TF_DIR }}" init -input=false -backend=false -upgrade
 
       - name: Terraform Validate
-        working-directory: ${{ env.TF_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-          terraform validate
+          terraform -chdir="${{ env.TF_DIR }}" validate
 
       # ---- Real backend init, then plan/apply ----
       - name: Configure AWS (keys)
@@ -96,38 +87,43 @@ jobs:
           echo "Using BACKEND_KEY=$BACKEND_KEY"
 
       - name: Terraform Init (remote backend)
-        working-directory: ${{ env.TF_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-          terraform init \
+          terraform -chdir="${{ env.TF_DIR }}" init \
             -backend-config="bucket=$TF_BACKEND_BUCKET" \
             -backend-config="key=$BACKEND_KEY" \
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
       - name: Build -var args
-        working-directory: ${{ env.TF_DIR }}
         id: varargs
         shell: bash
         run: |
           set -euo pipefail
           VAR_ARGS=()
+          # Split on spaces; each token must be key=value
           read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
-          for w in "${WORDS[@]}"; do
-            [[ -n "$w" ]] && VAR_ARGS+=("-var" "$w")
+          for w in "${WORDS[@]:-}"; do
+            [[ -z "$w" ]] && continue
+            # Reject tokens without '=' to avoid accidental positional args
+            if [[ "$w" != *"="* ]]; then
+              echo "⚠️ Skipping invalid tf_vars token (no '='): $w"
+              continue
+            fi
+            VAR_ARGS+=("-var" "$w")
           done
           printf '%s\0' "${VAR_ARGS[@]}" > var_args.null
 
       - name: Terraform Plan
-        working-directory: ${{ env.TF_DIR }}
         env:
           TF_IN_AUTOMATION: true
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -d '' VAR_ARGS < var_args.null || true
-          terraform plan \
+          mapfile -d '' VAR_ARGS < "${{ env.TF_DIR }}/var_args.null" || true
+          # Always pass region explicitly; then any extras
+          terraform -chdir="${{ env.TF_DIR }}" plan \
             -lock-timeout=5m \
             -input=false \
             -out=tfplan \
@@ -135,10 +131,10 @@ jobs:
             "${VAR_ARGS[@]}"
 
       - name: Terraform Apply
-        working-directory: ${{ env.TF_DIR }}
         env:
           TF_IN_AUTOMATION: true
         shell: bash
         run: |
           set -euo pipefail
-          terraform apply -lock-timeout=5m -auto-approve tfplan
+          terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=5m -auto-approve tfplan
+
