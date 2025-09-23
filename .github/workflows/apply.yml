@@ -145,3 +145,5 @@ jobs:
           TF_IN_AUTOMATION: true
         shell: bash
         run: terraform apply -lock-timeout=5m -auto-approve tfplan
+      - name: Success
+        run: echo "✅ Terraform apply completed successfully" 
