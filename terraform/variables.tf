@@ -16,7 +16,6 @@ variable "cluster_version" {
   default     = "1.29"
 }
 
-# Spot node group sizing (Group A)
 variable "spot_instance_types" {
   type        = list(string)
   description = "Instance types for the SPOT group"
@@ -38,7 +37,6 @@ variable "spot_max_size" {
   default = 1
 }
 
-# On-demand node group sizing (Group B)
 variable "od_instance_types" {
   type        = list(string)
   description = "Instance types for the ON_DEMAND group"
@@ -60,13 +58,11 @@ variable "od_max_size" {
   default = 1
 }
 
-# Access management (EKS)
 variable "admin_principal_arn" {
   type        = string
   description = "IAM user/role ARN to grant cluster-admin via EKS Access Entry"
 }
 
-# NodePort exposure knobs
 variable "enable_nodeport_ingress" {
   type        = bool
   description = "Whether to allow inbound NodePort range (30000-32767/tcp) to worker nodes."
@@ -78,14 +74,12 @@ variable "nodeport_cidrs" {
   description = "CIDR blocks allowed to reach NodePort range (used only when enable_nodeport_ingress=true)."
   default     = ["0.0.0.0/0"]
 
-  # Validation can reference only THIS variable.
   validation {
     condition     = alltrue([for c in var.nodeport_cidrs : can(cidrhost(c, 0))])
     error_message = "nodeport_cidrs must be a list of valid CIDR blocks, e.g. [\"203.0.113.10/32\"]."
   }
 }
 
-# Launch Template version selection
 variable "lt_version" {
   type        = string
   description = "Launch Template version for EKS node groups (\"$Latest\" or a specific version string like \"3\")."

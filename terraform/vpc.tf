@@ -25,9 +25,6 @@ resource "aws_subnet" "public" {
   availability_zone       = each.value
   map_public_ip_on_launch = true
 
-  # IMPORTANT TAGS:
-  # - elb tag marks these as "public" for classic/NLB/ALB controller
-  # - cluster tag allows the AWS LB Controller / k8s to discover usable subnets
   tags = {
     Name                                                = "${var.project_name}-public-${each.key}"
     "kubernetes.io/role/elb"                            = "1"
