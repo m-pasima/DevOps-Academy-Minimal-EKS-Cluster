@@ -25,13 +25,14 @@ jobs:
       TF_BACKEND_BUCKET:  ${{ secrets.TF_BACKEND_BUCKET }}
       TF_BACKEND_TABLE:   ${{ secrets.TF_BACKEND_TABLE }}
       TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
+      # Optional: speeds up subsequent runs by caching providers
+      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/.terraform.d/plugin-cache
 
     steps:
-      # Ensure we do NOT reuse a dirty workspace
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           clean: true
+          fetch-depth: 0
 
       - name: Resolve directory
         shell: bash
@@ -41,33 +42,45 @@ jobs:
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
           test -d "$TF_DIR" || { echo "❌ Directory '$TF_DIR' not found"; exit 1; }
 
-      - name: Show TF files we are about to run
+      - name: Show files (sanity)
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== PWD ==="
-          pwd
-          echo "=== List TF_DIR ==="
-          ls -la "$TF_DIR"
-          echo "=== variables.tf (first 120 lines) ==="
-          sed -n '1,120p' "$TF_DIR/variables.tf" || true
-          echo "=== Count of terraform{} blocks across TF_DIR ==="
-          grep -R --line-number 'terraform *{' "$TF_DIR" || true
+          echo "PWD=$(pwd)"
+          echo "=== list ${{ env.TF_DIR }} ==="
+          ls -la "${{ env.TF_DIR }}"
+          echo "=== head providers.tf ==="
+          sed -n '1,120p' "${{ env.TF_DIR }}/providers.tf" || true
+          echo "=== head variables.tf ==="
+          sed -n '1,120p' "${{ env.TF_DIR }}/variables.tf" || true
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
-      # Fail fast on formatting/syntax BEFORE init/backends
-      - name: Terraform Fmt & Validate (fail fast)
+      - name: Ensure plugin cache dir
+        shell: bash
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+      # ---- Install providers WITHOUT backend (required before validate) ----
+      - name: Terraform Init (providers only, no backend)
         working-directory: ${{ env.TF_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-          terraform fmt -check -recursive
+          terraform init -input=false -backend=false -upgrade
+          echo "=== .terraform.lock.hcl ==="
+          sed -n '1,120p' .terraform.lock.hcl || true
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
           terraform validate
 
+      # ---- Real backend init, then plan/apply ----
       - name: Configure AWS (keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -88,17 +101,18 @@ jobs:
           echo "BACKEND_KEY=$BACKEND_KEY" >> "$GITHUB_ENV"
           echo "Using BACKEND_KEY=$BACKEND_KEY"
 
-      - name: Terraform Init
+      - name: Terraform Init (remote backend)
         working-directory: ${{ env.TF_DIR }}
         shell: bash
         run: |
+          set -euo pipefail
           terraform init \
             -backend-config="bucket=$TF_BACKEND_BUCKET" \
             -backend-config="key=$BACKEND_KEY" \
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
-      - name: Build -var args from tf_vars
+      - name: Build -var args
         id: varargs
         shell: bash
         run: |
@@ -116,6 +130,7 @@ jobs:
           TF_IN_AUTOMATION: true
         shell: bash
         run: |
+          set -euo pipefail
           mapfile -d '' VAR_ARGS < ../var_args.null || true
           terraform plan \
             -lock-timeout=5m \
