@@ -2,7 +2,7 @@
 # EKS Control Plane + Two Node Groups
 ############################################
 
-# Cluster IAM role
+# ---------- Cluster IAM role ----------
 resource "aws_iam_role" "cluster" {
   name = "${var.project_name}-cluster-role"
   assume_role_policy = jsonencode({
@@ -20,38 +20,49 @@ resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
+# Recommended for ENI mgmt / SG-for-Pods
 resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSVPCResourceController" {
   role       = aws_iam_role.cluster.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
 }
 
-# -------------------------------------------------------
-# Security Groups (no inline rules -> rules managed below)
-# -------------------------------------------------------
-
-# Control-plane Security Group (attached to EKS control-plane ENIs)
+# ---------- Security Groups (no inline ingress rules to avoid drift) ----------
+# Cluster SG mediates control-plane <-> node traffic
 resource "aws_security_group" "cluster" {
-  name                   = "${var.project_name}-cluster-sg"
-  description            = "EKS cluster security group"
-  vpc_id                 = aws_vpc.this.id
-  revoke_rules_on_delete = true
+  name        = "${var.project_name}-cluster-sg"
+  description = "EKS cluster security group"
+  vpc_id      = aws_vpc.this.id
+
+  # Egress required so control plane can reach nodes
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   tags = { Name = "${var.project_name}-cluster-sg" }
 }
 
-# Node Security Group (for managed node groups)
+# Node SG attached via Launch Template
 resource "aws_security_group" "node" {
-  name                   = "${var.project_name}-node-sg"
-  description            = "EKS worker nodes"
-  vpc_id                 = aws_vpc.this.id
-  revoke_rules_on_delete = true
+  name        = "${var.project_name}-node-sg"
+  description = "EKS worker nodes"
+  vpc_id      = aws_vpc.this.id
+
+  # Outbound to internet for image pulls, etc.
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   tags = { Name = "${var.project_name}-node-sg" }
 }
 
-# ---------------------------
-# Cluster SG: rules
-# ---------------------------
-
-# Allow nodes to talk to API server on 443
+# ---------- REQUIRED cross-SG rules: control-plane <-> nodes ----------
+# Nodes -> Control-plane (API server on 443)
 resource "aws_security_group_rule" "cluster_in_from_nodes_443" {
   type                     = "ingress"
   description              = "Nodes to control-plane API"
@@ -62,32 +73,7 @@ resource "aws_security_group_rule" "cluster_in_from_nodes_443" {
   source_security_group_id = aws_security_group.node.id
 }
 
-# Egress all from control-plane (typical)
-resource "aws_security_group_rule" "cluster_egress_all" {
-  type              = "egress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.cluster.id
-}
-
-# ---------------------------
-# Node SG: rules
-# ---------------------------
-
-# Node-to-node traffic (pod-to-pod etc.)
-resource "aws_security_group_rule" "node_in_from_self_all" {
-  type              = "ingress"
-  description       = "Node to node all traffic"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  security_group_id = aws_security_group.node.id
-  self              = true
-}
-
-# Kubelet (control-plane -> nodes)
+# Control-plane -> Nodes (kubelet)
 resource "aws_security_group_rule" "node_in_from_cluster_10250" {
   type                     = "ingress"
   description              = "Control-plane to kubelet"
@@ -98,7 +84,7 @@ resource "aws_security_group_rule" "node_in_from_cluster_10250" {
   source_security_group_id = aws_security_group.cluster.id
 }
 
-# Ephemeral (control-plane -> nodes), adjust to your CNI if needed
+# Control-plane -> Nodes (ephemeral for health checks, etc.)
 resource "aws_security_group_rule" "node_in_from_cluster_ephemeral" {
   type                     = "ingress"
   description              = "Control-plane to nodes ephemeral"
@@ -109,7 +95,18 @@ resource "aws_security_group_rule" "node_in_from_cluster_ephemeral" {
   source_security_group_id = aws_security_group.cluster.id
 }
 
-# Optional NodePorts (teaching/demo). Toggle & narrow via variables.
+# Nodes <-> Nodes (pod-to-pod, CNI, etc.)
+resource "aws_security_group_rule" "node_in_from_self_all" {
+  type              = "ingress"
+  description       = "Node to node all traffic"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  security_group_id = aws_security_group.node.id
+  self              = true
+}
+
+# Optional: External access to NodePorts (prefer ALB/NLB instead)
 resource "aws_security_group_rule" "node_in_nodeports_optional" {
   count             = var.enable_nodeport_ingress ? 1 : 0
   type              = "ingress"
@@ -119,22 +116,16 @@ resource "aws_security_group_rule" "node_in_nodeports_optional" {
   protocol          = "tcp"
   security_group_id = aws_security_group.node.id
   cidr_blocks       = var.nodeport_cidrs
+
+  lifecycle {
+    precondition {
+      condition     = length(var.nodeport_cidrs) > 0
+      error_message = "When enable_nodeport_ingress=true, you must provide at least one CIDR in var.nodeport_cidrs."
+    }
+  }
 }
 
-# Egress all from nodes
-resource "aws_security_group_rule" "node_egress_all" {
-  type              = "egress"
-  from_port         = 0
-  to_port           = 0
-  protocol          = "-1"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.node.id
-}
-
-# ---------------------------
-# EKS Cluster
-# ---------------------------
-
+# ---------- EKS Cluster ----------
 resource "aws_eks_cluster" "this" {
   name     = "${var.project_name}-cluster"
   role_arn = aws_iam_role.cluster.arn
@@ -145,18 +136,18 @@ resource "aws_eks_cluster" "this" {
     endpoint_private_access = false
     security_group_ids      = [aws_security_group.cluster.id]
     subnet_ids              = [for s in aws_subnet.public : s.id]
-
-    # Tip: control public API access via public_access_cidrs (not SG):
-    # public_access_cidrs = ["x.y.z.w/32"]  # optional, lock down API CIDRs
+    # public_access_cidrs can be narrowed here if you want to restrict the API endpoint source IPs.
+    # public_access_cidrs = ["x.x.x.x/32"]
   }
 
-  # Keep Access API enabled; avoid future toggles of bootstrap bit
+  # Enable the Access Entries API; keep bootstrap=true to avoid ForceNew on existing clusters.
   access_config {
     authentication_mode                         = "API_AND_CONFIG_MAP"
     bootstrap_cluster_creator_admin_permissions = true
   }
 
   lifecycle {
+    # Prevent accidental replacement if the bootstrap bit drifts.
     ignore_changes = [
       access_config[0].bootstrap_cluster_creator_admin_permissions
     ]
@@ -168,10 +159,7 @@ resource "aws_eks_cluster" "this" {
   ]
 }
 
-# ---------------------------
-# Node IAM role
-# ---------------------------
-
+# ---------- Node IAM role ----------
 resource "aws_iam_role" "node" {
   name = "${var.project_name}-node-role"
   assume_role_policy = jsonencode({
@@ -197,10 +185,7 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
-# ---------------------------
-# Launch Template (to attach Node SG)
-# ---------------------------
-
+# ---------- Launch Template: attach Node SG (AMI/user_data managed by EKS MNG) ----------
 resource "aws_launch_template" "nodes" {
   name_prefix            = "${var.project_name}-ng-"
   update_default_version = true
@@ -217,10 +202,7 @@ resource "aws_launch_template" "nodes" {
   }
 }
 
-# ---------------------------
-# Managed Node Group (SPOT)
-# ---------------------------
-
+# ---------- Managed Node Group (SPOT) ----------
 resource "aws_eks_node_group" "spot" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.project_name}-spot"
@@ -252,10 +234,7 @@ resource "aws_eks_node_group" "spot" {
   ]
 }
 
-# ---------------------------
-# Managed Node Group (ON_DEMAND)
-# ---------------------------
-
+# ---------- Managed Node Group (ON_DEMAND) ----------
 resource "aws_eks_node_group" "on_demand" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.project_name}-on-demand"
@@ -287,10 +266,8 @@ resource "aws_eks_node_group" "on_demand" {
   ]
 }
 
-# ---------------------------
-# Modern RBAC: Access Entry + ClusterAdmin
-# ---------------------------
-
+# ---------- Modern RBAC: EKS Access Entry + ClusterAdminPolicy ----------
+# (Your workflow imports these on first run if they already exist.)
 resource "aws_eks_access_entry" "admin" {
   cluster_name  = aws_eks_cluster.this.name
   principal_arn = var.admin_principal_arn
@@ -307,4 +284,4 @@ resource "aws_eks_access_policy_association" "admin_cluster_admin" {
     type = "cluster"
   }
 }
-# END OF FILE
+# ------
