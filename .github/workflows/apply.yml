@@ -1,3 +1,4 @@
+
 name: Apply EKS (dir, IAM user)
 
 on:
@@ -140,32 +141,30 @@ jobs:
 
           in_state() {
             local addr="$1"
-            terraform -chdir="${{ env.TF_DIR }}" state list -lock=false 2>/dev/null | grep -qx "$addr"
+            terraform -chdir="${{ env.TF_DIR }}" state list -lock=false 2>/dev/null | grep -Fx "$addr" >/dev/null
           }
 
-          # Verify IAM roles exist in AWS
-          echo "→ Checking IAM Roles in AWS"
-          aws iam get-role --role-name teaching-eks-cluster-role --region "${AWS_REGION}" || {
-            echo "  • Error: IAM role teaching-eks-cluster-role does not exist in AWS"
-            exit 1
-          }
-          aws iam get-role --role-name teaching-eks-node-role --region "${AWS_REGION}" || {
-            echo "  • Error: IAM role teaching-eks-node-role does not exist in AWS"
-            exit 1
-          }
+          # Debug: Show current Terraform state
+          echo "→ Current Terraform state"
+          terraform -chdir="${{ env.TF_DIR }}" state list -lock=false || echo "  • No resources in state"
 
           # Import IAM Role: teaching-eks-cluster-role
           echo "→ IAM Role (cluster)"
           if in_state "aws_iam_role.cluster"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (teaching-eks-cluster-role)"
-            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_iam_role.cluster teaching-eks-cluster-role || {
-              echo "  • Failed to import IAM role teaching-eks-cluster-role"
-              exit 1
-            }
-            echo "  • Successfully imported teaching-eks-cluster-role"
+            echo "  • Checking if teaching-eks-cluster-role exists in AWS"
+            if aws iam get-role --role-name teaching-eks-cluster-role --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "  • Importing (teaching-eks-cluster-role)"
+              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                aws_iam_role.cluster teaching-eks-cluster-role || {
+                echo "  • Failed to import IAM role teaching-eks-cluster-role"
+                exit 1
+              }
+              echo "  • Successfully imported teaching-eks-cluster-role"
+            else
+              echo "  • Role teaching-eks-cluster-role does not exist in AWS; will be created during apply"
+            fi
           fi
 
           # Import IAM Role: teaching-eks-node-role
@@ -173,13 +172,18 @@ jobs:
           if in_state "aws_iam_role.node"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (teaching-eks-node-role)"
-            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_iam_role.node teaching-eks-node-role || {
-              echo "  • Failed to import IAM role teaching-eks-node-role"
-              exit 1
-            }
-            echo "  • Successfully imported teaching-eks-node-role"
+            echo "  • Checking if teaching-eks-node-role exists in AWS"
+            if aws iam get-role --role-name teaching-eks-node-role --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "  • Importing (teaching-eks-node-role)"
+              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                aws_iam_role.node teaching-eks-node-role || {
+                echo "  • Failed to import IAM role teaching-eks-node-role"
+                exit 1
+              }
+              echo "  • Successfully imported teaching-eks-node-role"
+            else
+              echo "  • Role teaching-eks-node-role does not exist in AWS; will be created during apply"
+            fi
           fi
 
           # Import Subnet: subnet-07283d2152a4fbb12 (key 'a')
@@ -187,13 +191,18 @@ jobs:
           if in_state "aws_subnet.public[\"a\"]"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (subnet-07283d2152a4fbb12)"
-            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_subnet.public[\"a\"] subnet-07283d2152a4fbb12 || {
-              echo "  • Failed to import subnet subnet-07283d2152a4fbb12"
-              exit 1
-            }
-            echo "  • Successfully imported subnet-07283d2152a4fbb12"
+            echo "  • Checking if subnet-07283d2152a4fbb12 exists in AWS"
+            if aws ec2 describe-subnets --subnet-ids subnet-07283d2152a4fbb12 --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "  • Importing (subnet-07283d2152a4fbb12)"
+              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                aws_subnet.public[\"a\"] subnet-07283d2152a4fbb12 || {
+                echo "  • Failed to import subnet subnet-07283d2152a4fbb12"
+                exit 1
+              }
+              echo "  • Successfully imported subnet-07283d2152a4fbb12"
+            else
+              echo "  • Subnet subnet-07283d2152a4fbb12 does not exist in AWS; will be created during apply"
+            fi
           fi
 
           # Import Subnet: subnet-05f324d922d729008 (key 'b')
@@ -201,40 +210,56 @@ jobs:
           if in_state "aws_subnet.public[\"b\"]"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (subnet-05f324d922d729008)"
-            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_subnet.public[\"b\"] subnet-05f324d922d729008 || {
-              echo "  • Failed to import subnet subnet-05f324d922d729008"
-              exit 1
-            }
-            echo "  • Successfully imported subnet-05f324d922d729008"
+            echo "  • Checking if subnet-05f324d922d729008 exists in AWS"
+            if aws ec2 describe-subnets --subnet-ids subnet-05f324d922d729008 --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "  • Importing (subnet-05f324d922d729008)"
+              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                aws_subnet.public[\"b\"] subnet-05f324d922d729008 || {
+                echo "  • Failed to import subnet subnet-05f324d922d729008"
+                exit 1
+              }
+              echo "  • Successfully imported subnet-05f324d922d729008"
+            else
+              echo "  • Subnet subnet-05f324d922d729008 does not exist in AWS; will be created during apply"
+            fi
           fi
 
-          # Import Route Table Associations
+          # Import Route Table Association: rtbassoc-0ecb61f0f3ac4305f (key 'a')
           echo "→ Route Table Association (a)"
           if in_state "aws_route_table_association.public[\"a\"]"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (rtbassoc-0ecb61f0f3ac4305f)"
-            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_route_table_association.public[\"a\"] rtbassoc-0ecb61f0f3ac4305f || {
-              echo "  • Failed to import route table association rtbassoc-0ecb61f0f3ac4305f"
-              exit 1
-            }
-            echo "  • Successfully imported rtbassoc-0ecb61f0f3ac4305f"
+            echo "  • Checking if rtbassoc-0ecb61f0f3ac4305f exists in AWS"
+            if aws ec2 describe-route-tables --filters Name=association.route-table-association-id,Values=rtbassoc-0ecb61f0f3ac4305f --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "  • Importing (rtbassoc-0ecb61f0f3ac4305f)"
+              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                aws_route_table_association.public[\"a\"] rtbassoc-0ecb61f0f3ac4305f || {
+                echo "  • Failed to import route table association rtbassoc-0ecb61f0f3ac4305f"
+                exit 1
+              }
+              echo "  • Successfully imported rtbassoc-0ecb61f0f3ac4305f"
+            else
+              echo "  • Route table association rtbassoc-0ecb61f0f3ac4305f does not exist in AWS; will be created during apply"
+            fi
           fi
 
+          # Import Route Table Association: rtbassoc-0ef7cae7d11d64815 (key 'b')
           echo "→ Route Table Association (b)"
           if in_state "aws_route_table_association.public[\"b\"]"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (rtbassoc-0ef7cae7d11d64815)"
-            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_route_table_association.public[\"b\"] rtbassoc-0ef7cae7d11d64815 || {
-              echo "  • Failed to import route table association rtbassoc-0ef7cae7d11d64815"
-              exit 1
-            }
-            echo "  • Successfully imported rtbassoc-0ef7cae7d11d64815"
+            echo "  • Checking if rtbassoc-0ef7cae7d11d64815 exists in AWS"
+            if aws ec2 describe-route-tables --filters Name=association.route-table-association-id,Values=rtbassoc-0ef7cae7d11d64815 --region "${AWS_REGION}" >/dev/null 2>&1; then
+              echo "  • Importing (rtbassoc-0ef7cae7d11d64815)"
+              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                aws_route_table_association.public[\"b\"] rtbassoc-0ef7cae7d11d64815 || {
+                echo "  • Failed to import route table association rtbassoc-0ef7cae7d11d64815"
+                exit 1
+              }
+              echo "  • Successfully imported rtbassoc-0ef7cae7d11d64815"
+            else
+              echo "  • Route table association rtbassoc-0ef7cae7d11d64815 does not exist in AWS; will be created during apply"
+            fi
           fi
 
           # Check if EKS cluster exists
