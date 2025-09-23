@@ -7,6 +7,10 @@ on:
         description: 'Terraform directory to apply'
         required: true
         default: 'terraform'
+      admin_principal_arn:
+        description: 'IAM user/role ARN to grant cluster-admin (var.admin_principal_arn)'
+        required: false
+        default: ''
       tf_vars:
         description: 'Extra TF -var values (key=value, space-separated)'
         required: false
@@ -52,12 +56,13 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      # ---- Install providers WITHOUT backend (required before validate) ----
+      # Install providers WITHOUT backend so validate has schemas
       - name: Terraform Init (providers only, no backend)
         shell: bash
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" init -input=false -backend=false -upgrade
+          sed -n '1,80p' "${{ env.TF_DIR }}/.terraform.lock.hcl" || true
 
       - name: Terraform Validate
         shell: bash
@@ -65,7 +70,7 @@ jobs:
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" validate
 
-      # ---- Real backend init, then plan/apply ----
+      # Real backend init, then plan/apply
       - name: Configure AWS (keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -96,38 +101,41 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
-      - name: Build -var args
-        id: varargs
+      - name: Terraform Plan
+        env:
+          TF_IN_AUTOMATION: true
+          ADMIN_INPUT:  ${{ github.event.inputs.admin_principal_arn }}
+          ADMIN_SECRET: ${{ secrets.ADMIN_PRINCIPAL_ARN }}
         shell: bash
         run: |
           set -euo pipefail
+
+          # Resolve admin_principal_arn (input wins, else secret)
+          ADMIN="${ADMIN_INPUT:-}"
+          if [[ -z "$ADMIN" ]]; then ADMIN="${ADMIN_SECRET:-}"; fi
+          if [[ -z "$ADMIN" ]]; then
+            echo "❌ var.admin_principal_arn is required. Provide it via workflow input or set secrets.ADMIN_PRINCIPAL_ARN."
+            exit 1
+          fi
+
+          # Build extra -var args from tf_vars safely
           VAR_ARGS=()
-          # Split on spaces; each token must be key=value
           read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
           for w in "${WORDS[@]:-}"; do
             [[ -z "$w" ]] && continue
-            # Reject tokens without '=' to avoid accidental positional args
             if [[ "$w" != *"="* ]]; then
               echo "⚠️ Skipping invalid tf_vars token (no '='): $w"
               continue
             fi
             VAR_ARGS+=("-var" "$w")
           done
-          printf '%s\0' "${VAR_ARGS[@]}" > var_args.null
 
-      - name: Terraform Plan
-        env:
-          TF_IN_AUTOMATION: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -d '' VAR_ARGS < "${{ env.TF_DIR }}/var_args.null" || true
-          # Always pass region explicitly; then any extras
           terraform -chdir="${{ env.TF_DIR }}" plan \
             -lock-timeout=5m \
             -input=false \
             -out=tfplan \
             -var "region=$AWS_REGION" \
+            -var "admin_principal_arn=$ADMIN" \
             "${VAR_ARGS[@]}"
 
       - name: Terraform Apply
@@ -137,4 +145,5 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=5m -auto-approve tfplan
+
 
