@@ -22,9 +22,21 @@ variable "spot_instance_types" {
   description = "Instance types for the SPOT group"
   default     = ["t3.small"]
 }
-variable "spot_min_size"     { type = number, default = 1 }
-variable "spot_desired_size" { type = number, default = 1 }
-variable "spot_max_size"     { type = number, default = 1 }
+
+variable "spot_min_size" {
+  type    = number
+  default = 1
+}
+
+variable "spot_desired_size" {
+  type    = number
+  default = 1
+}
+
+variable "spot_max_size" {
+  type    = number
+  default = 1
+}
 
 # On-demand node group sizing (Group B)
 variable "od_instance_types" {
@@ -32,9 +44,21 @@ variable "od_instance_types" {
   description = "Instance types for the ON_DEMAND group"
   default     = ["t3.small"]
 }
-variable "od_min_size"     { type = number, default = 1 }
-variable "od_desired_size" { type = number, default = 1 }
-variable "od_max_size"     { type = number, default = 1 }
+
+variable "od_min_size" {
+  type    = number
+  default = 1
+}
+
+variable "od_desired_size" {
+  type    = number
+  default = 1
+}
+
+variable "od_max_size" {
+  type    = number
+  default = 1
+}
 
 # Access management (EKS)
 variable "admin_principal_arn" {
