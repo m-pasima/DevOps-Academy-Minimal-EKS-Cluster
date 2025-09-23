@@ -49,7 +49,6 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      # Install providers WITHOUT touching the backend (so validate has schemas)
       - name: Terraform Init (providers only, no backend)
         shell: bash
         run: |
@@ -63,7 +62,6 @@ jobs:
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" validate
 
-      # Real backend init, then plan/apply
       - name: Configure AWS (keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -94,11 +92,10 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
-      - name: Derive cluster name and admin_principal_arn
+      - name: Derive cluster name and admin_principal_arn, export TF_VARs
         shell: bash
         run: |
           set -euo pipefail
-          # Pull project_name=... out of tf_vars if present; else default to "teaching-eks"
           PROJECT_NAME="teaching-eks"
           for tok in ${{ github.event.inputs.tf_vars }}; do
             if [[ "$tok" == project_name=* ]]; then
@@ -124,31 +121,36 @@ jobs:
             echo "PROJECT_NAME=$PROJECT_NAME"
             echo "CLUSTER=$CLUSTER"
             echo "ADMIN=$ADMIN"
+            # Critical: make imports non-interactive by providing vars via env
+            echo "TF_VAR_admin_principal_arn=$ADMIN"
+            echo "TF_VAR_region=$AWS_REGION"
+            echo "TF_VAR_project_name=$PROJECT_NAME"
           } >> "$GITHUB_ENV"
 
           echo "Resolved: CLUSTER=$CLUSTER"
           echo "Resolved: admin_principal_arn=$ADMIN"
 
-      # If the cluster already has an access entry (common), import it so TF won't try to recreate.
-      - name: Import EKS Access Entry (idempotent)
+      - name: Import EKS Access Entry (idempotent, non-interactive)
         shell: bash
         run: |
           set -euo pipefail
           if ! terraform -chdir="${{ env.TF_DIR }}" state list | grep -q '^aws_eks_access_entry\.admin$'; then
             echo "Attempting import of aws_eks_access_entry.admin (${CLUSTER}:${ADMIN})"
-            terraform -chdir="${{ env.TF_DIR }}" import aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
+            terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
+              aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
           else
             echo "Access Entry already in state; skipping import."
           fi
 
-      - name: Import Access Policy Association (idempotent)
+      - name: Import Access Policy Association (idempotent, non-interactive)
         shell: bash
         run: |
           set -euo pipefail
           ASSOC_ID="${CLUSTER}#${ADMIN}#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
           if ! terraform -chdir="${{ env.TF_DIR }}" state list | grep -q '^aws_eks_access_policy_association\.admin_cluster_admin$'; then
             echo "Attempting import of aws_eks_access_policy_association.admin_cluster_admin ($ASSOC_ID)"
-            terraform -chdir="${{ env.TF_DIR }}" import aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
+            terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
+              aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
           else
             echo "Access Policy Association already in state; skipping import."
           fi
@@ -160,7 +162,6 @@ jobs:
         run: |
           set -euo pipefail
           VAR_ARGS=()
-          # Build extra -var args from tf_vars safely
           read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
           for w in "${WORDS[@]:-}"; do
             [[ -z "$w" ]] && continue
