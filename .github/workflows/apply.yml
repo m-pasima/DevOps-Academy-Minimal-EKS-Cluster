@@ -94,25 +94,64 @@ jobs:
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
-      - name: Derive admin_principal_arn from current credentials
-        id: admin
+      - name: Derive cluster name and admin_principal_arn
         shell: bash
         run: |
           set -euo pipefail
+          # Pull project_name=... out of tf_vars if present; else default to "teaching-eks"
+          PROJECT_NAME="teaching-eks"
+          for tok in ${{ github.event.inputs.tf_vars }}; do
+            if [[ "$tok" == project_name=* ]]; then
+              PROJECT_NAME="${tok#project_name=}"
+            fi
+          done
+          CLUSTER="${PROJECT_NAME}-cluster"
+
           ARN="$(aws sts get-caller-identity --query Arn --output text)"
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+
           if [[ "$ARN" == *":user/"* ]]; then
             ADMIN="$ARN"
           elif [[ "$ARN" == *":assumed-role/"* ]]; then
-            # arn:aws:sts::123456789012:assumed-role/RoleName/Session -> arn:aws:iam::123456789012:role/RoleName
             ROLE_NAME="$(echo "$ARN" | awk -F'/' '{print $2}')"
             ADMIN="arn:aws:iam::${ACCOUNT}:role/${ROLE_NAME}"
           else
             echo "❌ Unsupported caller ARN for admin mapping: $ARN"
             exit 1
           fi
-          echo "ADMIN=$ADMIN" >> "$GITHUB_ENV"
-          echo "Resolved admin_principal_arn=$ADMIN"
+
+          {
+            echo "PROJECT_NAME=$PROJECT_NAME"
+            echo "CLUSTER=$CLUSTER"
+            echo "ADMIN=$ADMIN"
+          } >> "$GITHUB_ENV"
+
+          echo "Resolved: CLUSTER=$CLUSTER"
+          echo "Resolved: admin_principal_arn=$ADMIN"
+
+      # If the cluster already has an access entry (common), import it so TF won't try to recreate.
+      - name: Import EKS Access Entry (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! terraform -chdir="${{ env.TF_DIR }}" state list | grep -q '^aws_eks_access_entry\.admin$'; then
+            echo "Attempting import of aws_eks_access_entry.admin (${CLUSTER}:${ADMIN})"
+            terraform -chdir="${{ env.TF_DIR }}" import aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
+          else
+            echo "Access Entry already in state; skipping import."
+          fi
+
+      - name: Import Access Policy Association (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSOC_ID="${CLUSTER}#${ADMIN}#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          if ! terraform -chdir="${{ env.TF_DIR }}" state list | grep -q '^aws_eks_access_policy_association\.admin_cluster_admin$'; then
+            echo "Attempting import of aws_eks_access_policy_association.admin_cluster_admin ($ASSOC_ID)"
+            terraform -chdir="${{ env.TF_DIR }}" import aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
+          else
+            echo "Access Policy Association already in state; skipping import."
+          fi
 
       - name: Terraform Plan
         env:

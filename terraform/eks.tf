@@ -20,7 +20,6 @@ resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-# Recommended for SG-for-Pods / ENI mgmt
 resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSVPCResourceController" {
   role       = aws_iam_role.cluster.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
@@ -32,7 +31,6 @@ resource "aws_security_group" "cluster" {
   description = "EKS cluster security group"
   vpc_id      = aws_vpc.this.id
 
-  # API access (tighten to your office IP if desired)
   ingress {
     description = "K8s API"
     from_port   = 443
@@ -51,13 +49,12 @@ resource "aws_security_group" "cluster" {
   tags = { Name = "${var.project_name}-cluster-sg" }
 }
 
-# Node Security Group (we will attach this via Launch Template)
+# Node Security Group
 resource "aws_security_group" "node" {
   name        = "${var.project_name}-node-sg"
   description = "EKS worker nodes"
   vpc_id      = aws_vpc.this.id
 
-  # Outbound to internet for image pulls, etc.
   egress {
     from_port   = 0
     to_port     = 0
@@ -68,8 +65,7 @@ resource "aws_security_group" "node" {
   tags = { Name = "${var.project_name}-node-sg" }
 }
 
-# REQUIRED cross-SG rules: control-plane <-> nodes
-# Nodes -> Control-plane (API server)
+# REQUIRED cross-SG rules
 resource "aws_security_group_rule" "cluster_in_from_nodes_443" {
   type                     = "ingress"
   description              = "Nodes to control-plane API"
@@ -80,7 +76,6 @@ resource "aws_security_group_rule" "cluster_in_from_nodes_443" {
   source_security_group_id = aws_security_group.node.id
 }
 
-# Control-plane -> Nodes (kubelet)
 resource "aws_security_group_rule" "node_in_from_cluster_10250" {
   type                     = "ingress"
   description              = "Control-plane to kubelet"
@@ -91,7 +86,6 @@ resource "aws_security_group_rule" "node_in_from_cluster_10250" {
   source_security_group_id = aws_security_group.cluster.id
 }
 
-# Control-plane -> Nodes (ephemeral for health checks, etc.)
 resource "aws_security_group_rule" "node_in_from_cluster_ephemeral" {
   type                     = "ingress"
   description              = "Control-plane to nodes ephemeral"
@@ -102,7 +96,6 @@ resource "aws_security_group_rule" "node_in_from_cluster_ephemeral" {
   source_security_group_id = aws_security_group.cluster.id
 }
 
-# Nodes <-> Nodes (pod-to-pod, CNI, etc.)
 resource "aws_security_group_rule" "node_in_from_self_all" {
   type              = "ingress"
   description       = "Node to node all traffic"
@@ -113,7 +106,7 @@ resource "aws_security_group_rule" "node_in_from_self_all" {
   self              = true
 }
 
-# Optional: External access to NodePorts (prefer ALB/NLB instead)
+# Optional NodePorts
 resource "aws_security_group_rule" "node_in_nodeports_optional" {
   type              = "ingress"
   description       = "NodePort range (optional)"
@@ -137,13 +130,11 @@ resource "aws_eks_cluster" "this" {
     subnet_ids              = [for s in aws_subnet.public : s.id]
   }
 
-  # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-  # FIX: enable the Access Entries API so aws_eks_access_* works
+  # Enable Access API, but DO NOT bootstrap the creator (we'll manage via TF)
   access_config {
     authentication_mode                         = "API_AND_CONFIG_MAP" # or "API"
-    bootstrap_cluster_creator_admin_permissions = true
+    bootstrap_cluster_creator_admin_permissions = false
   }
-  # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
   depends_on = [
     aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy,
