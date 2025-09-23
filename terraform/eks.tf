@@ -1,8 +1,3 @@
-############################################
-# EKS Control Plane + Two Node Groups
-############################################
-
-# ---------- Cluster IAM role ----------
 resource "aws_iam_role" "cluster" {
   name = "${var.project_name}-cluster-role"
   assume_role_policy = jsonencode({
@@ -122,7 +117,7 @@ resource "aws_eks_cluster" "this" {
     endpoint_public_access  = true
     endpoint_private_access = false
     security_group_ids      = [aws_security_group.cluster.id]
-    subnet_ids              = [for s in aws_subnet.public : s.id]
+    subnet_ids              = [for k, v in aws_subnet.public : v.id]
   }
 
   access_config {
@@ -187,7 +182,7 @@ resource "aws_eks_node_group" "spot" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.project_name}-spot"
   node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = [for s in aws_subnet.public : s.id]
+  subnet_ids      = [for k, v in aws_subnet.public : v.id]
 
   capacity_type  = "SPOT"
   instance_types = var.spot_instance_types
@@ -218,7 +213,7 @@ resource "aws_eks_node_group" "on_demand" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.project_name}-on-demand"
   node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = [for s in aws_subnet.public : s.id]
+  subnet_ids      = [for k, v in aws_subnet.public : v.id]
 
   capacity_type  = "ON_DEMAND"
   instance_types = var.od_instance_types
