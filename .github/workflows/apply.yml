@@ -25,8 +25,6 @@ jobs:
       TF_BACKEND_BUCKET:  ${{ secrets.TF_BACKEND_BUCKET }}
       TF_BACKEND_TABLE:   ${{ secrets.TF_BACKEND_TABLE }}
       TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
-      # Optional: speeds up subsequent runs by caching providers
-      TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/.terraform.d/plugin-cache
 
     steps:
       - uses: actions/checkout@v4
@@ -59,19 +57,15 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      - name: Ensure plugin cache dir
-        shell: bash
-        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
-
-      # ---- Install providers WITHOUT backend (required before validate) ----
+      # ---- Install providers WITHOUT touching the backend (required before validate) ----
       - name: Terraform Init (providers only, no backend)
         working-directory: ${{ env.TF_DIR }}
         shell: bash
         run: |
           set -euo pipefail
           terraform init -input=false -backend=false -upgrade
-          echo "=== .terraform.lock.hcl ==="
-          sed -n '1,120p' .terraform.lock.hcl || true
+          echo "=== .terraform.lock.hcl (first 60 lines) ==="
+          sed -n '1,60p' .terraform.lock.hcl || true
 
       - name: Terraform Validate
         working-directory: ${{ env.TF_DIR }}
@@ -113,6 +107,7 @@ jobs:
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
 
       - name: Build -var args
+        working-directory: ${{ env.TF_DIR }}
         id: varargs
         shell: bash
         run: |
@@ -131,7 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -d '' VAR_ARGS < ../var_args.null || true
+          mapfile -d '' VAR_ARGS < var_args.null || true
           terraform plan \
             -lock-timeout=5m \
             -input=false \
@@ -144,6 +139,6 @@ jobs:
         env:
           TF_IN_AUTOMATION: true
         shell: bash
-        run: terraform apply -lock-timeout=5m -auto-approve tfplan
-      - name: Success
-        run: echo "✅ Terraform apply completed successfully" 
+        run: |
+          set -euo pipefail
+          terraform apply -lock-timeout=5m -auto-approve tfplan
