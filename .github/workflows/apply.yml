@@ -49,7 +49,6 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      # Install providers WITHOUT touching the backend so validate has schemas
       - name: Terraform Init (providers only, no backend)
         shell: bash
         run: |
@@ -63,7 +62,6 @@ jobs:
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" validate -no-color
 
-      # Real backend init, then plan/apply
       - name: Configure AWS (keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -130,7 +128,6 @@ jobs:
           echo "Resolved: CLUSTER=$CLUSTER"
           echo "Resolved: admin_principal_arn=$ADMIN"
 
-      # Import access entry & policy assoc idempotently; skip DynamoDB lock for imports
       - name: Reconcile EKS Access Entry & Policy Association (no lock, list check)
         shell: bash
         run: |
@@ -192,4 +189,5 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=10m -auto-approve -no-color tfplan
+
 
