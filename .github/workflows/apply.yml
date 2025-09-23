@@ -40,9 +40,16 @@ jobs:
           echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
           test -d "$TF_DIR" || { echo "❌ Directory '$TF_DIR' not found"; exit 1; }
           echo "PWD=$(pwd)"
-          echo "=== ls $TF_DIR ==="; ls -la "$TF_DIR" || true
-          echo "=== providers.tf (head) ==="; sed -n '1,120p' "$TF_DIR/providers.tf" || true
-          echo "=== variables.tf (head) ==="; sed -n '1,120p' "$TF_DIR/variables.tf" || true
+          echo "=== ls $TF_DIR ==="
+          ls -la "$TF_DIR"
+          echo "=== terraform.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/terraform.tf"
+          echo "=== variables.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/variables.tf"
+          echo "=== vpc.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/vpc.tf"
+          echo "=== eks.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/eks.tf"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -54,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" init -backend=false -input=false -upgrade
-          sed -n '1,80p' "${{ env.TF_DIR }}/.terraform.lock.hcl" || true
+          sed -n '1,80p' "${{ env.TF_DIR }}/.terraform.lock.hcl"
 
       - name: Terraform Validate
         shell: bash
@@ -97,7 +104,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Default project_name; allow override from tf_vars
           PROJECT_NAME="teaching-eks"
           for tok in ${{ github.event.inputs.tf_vars }}; do
             if [[ "$tok" == project_name=* ]]; then PROJECT_NAME="${tok#project_name=}"; fi
@@ -119,7 +125,6 @@ jobs:
             echo "PROJECT_NAME=$PROJECT_NAME"
             echo "CLUSTER=$CLUSTER"
             echo "ADMIN=$ADMIN"
-            # Provide required vars non-interactively for any TF command (incl. import)
             echo "TF_VAR_admin_principal_arn=$ADMIN"
             echo "TF_VAR_region=$AWS_REGION"
             echo "TF_VAR_project_name=$PROJECT_NAME"
@@ -128,7 +133,7 @@ jobs:
           echo "Resolved: CLUSTER=$CLUSTER"
           echo "Resolved: admin_principal_arn=$ADMIN"
 
-      - name: Reconcile EKS Access Entry & Policy Association (no lock, list check)
+      - name: Reconcile IAM Roles, Subnets, and EKS Access Resources
         shell: bash
         run: |
           set -euo pipefail
@@ -138,23 +143,144 @@ jobs:
             terraform -chdir="${{ env.TF_DIR }}" state list -lock=false 2>/dev/null | grep -qx "$addr"
           }
 
-          echo "→ Access Entry"
-          if in_state "aws_eks_access_entry.admin"; then
+          # Verify IAM roles exist in AWS
+          echo "→ Checking IAM Roles in AWS"
+          aws iam get-role --role-name teaching-eks-cluster-role --region "${AWS_REGION}" || {
+            echo "  • Error: IAM role teaching-eks-cluster-role does not exist in AWS"
+            exit 1
+          }
+          aws iam get-role --role-name teaching-eks-node-role --region "${AWS_REGION}" || {
+            echo "  • Error: IAM role teaching-eks-node-role does not exist in AWS"
+            exit 1
+          }
+
+          # Import IAM Role: teaching-eks-cluster-role
+          echo "→ IAM Role (cluster)"
+          if in_state "aws_iam_role.cluster"; then
             echo "  • Already in state"
           else
-            echo "  • Importing (${CLUSTER}:${ADMIN})"
+            echo "  • Importing (teaching-eks-cluster-role)"
             terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || true
+              aws_iam_role.cluster teaching-eks-cluster-role || {
+              echo "  • Failed to import IAM role teaching-eks-cluster-role"
+              exit 1
+            }
+            echo "  • Successfully imported teaching-eks-cluster-role"
           fi
 
-          echo "→ Policy Association"
-          ASSOC_ID="${CLUSTER}#${ADMIN}#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          if in_state "aws_eks_access_policy_association.admin_cluster_admin"; then
+          # Import IAM Role: teaching-eks-node-role
+          echo "→ IAM Role (node)"
+          if in_state "aws_iam_role.node"; then
             echo "  • Already in state"
           else
-            echo "  • Importing ($ASSOC_ID)"
+            echo "  • Importing (teaching-eks-node-role)"
             terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
-              aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || true
+              aws_iam_role.node teaching-eks-node-role || {
+              echo "  • Failed to import IAM role teaching-eks-node-role"
+              exit 1
+            }
+            echo "  • Successfully imported teaching-eks-node-role"
+          fi
+
+          # Import Subnet: subnet-07283d2152a4fbb12 (key 'a')
+          echo "→ Subnet (a)"
+          if in_state "aws_subnet.public[\"a\"]"; then
+            echo "  • Already in state"
+          else
+            echo "  • Importing (subnet-07283d2152a4fbb12)"
+            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              aws_subnet.public[\"a\"] subnet-07283d2152a4fbb12 || {
+              echo "  • Failed to import subnet subnet-07283d2152a4fbb12"
+              exit 1
+            }
+            echo "  • Successfully imported subnet-07283d2152a4fbb12"
+          fi
+
+          # Import Subnet: subnet-05f324d922d729008 (key 'b')
+          echo "→ Subnet (b)"
+          if in_state "aws_subnet.public[\"b\"]"; then
+            echo "  • Already in state"
+          else
+            echo "  • Importing (subnet-05f324d922d729008)"
+            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              aws_subnet.public[\"b\"] subnet-05f324d922d729008 || {
+              echo "  • Failed to import subnet subnet-05f324d922d729008"
+              exit 1
+            }
+            echo "  • Successfully imported subnet-05f324d922d729008"
+          fi
+
+          # Import Route Table Associations
+          echo "→ Route Table Association (a)"
+          if in_state "aws_route_table_association.public[\"a\"]"; then
+            echo "  • Already in state"
+          else
+            echo "  • Importing (rtbassoc-0ecb61f0f3ac4305f)"
+            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              aws_route_table_association.public[\"a\"] rtbassoc-0ecb61f0f3ac4305f || {
+              echo "  • Failed to import route table association rtbassoc-0ecb61f0f3ac4305f"
+              exit 1
+            }
+            echo "  • Successfully imported rtbassoc-0ecb61f0f3ac4305f"
+          fi
+
+          echo "→ Route Table Association (b)"
+          if in_state "aws_route_table_association.public[\"b\"]"; then
+            echo "  • Already in state"
+          else
+            echo "  • Importing (rtbassoc-0ef7cae7d11d64815)"
+            terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              aws_route_table_association.public[\"b\"] rtbassoc-0ef7cae7d11d64815 || {
+              echo "  • Failed to import route table association rtbassoc-0ef7cae7d11d64815"
+              exit 1
+            }
+            echo "  • Successfully imported rtbassoc-0ef7cae7d11d64815"
+          fi
+
+          # Check if EKS cluster exists
+          echo "→ Checking EKS Cluster"
+          if aws eks describe-cluster --name "${CLUSTER}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "  • Cluster ${CLUSTER} exists"
+            # Import EKS Access Entry
+            echo "→ Access Entry"
+            if in_state "aws_eks_access_entry.admin"; then
+              echo "  • Already in state"
+            else
+              echo "  • Checking if access entry exists (${CLUSTER}:${ADMIN})"
+              if aws eks describe-access-entry --cluster-name "${CLUSTER}" --principal-arn "${ADMIN}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+                echo "  • Importing (${CLUSTER}:${ADMIN})"
+                terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                  aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || {
+                  echo "  • Failed to import access entry ${CLUSTER}:${ADMIN}"
+                  exit 1
+                }
+                echo "  • Successfully imported access entry"
+              else
+                echo "  • Access entry does not exist; will be created during apply"
+              fi
+            fi
+
+            # Import EKS Access Policy Association
+            echo "→ Policy Association"
+            ASSOC_ID="${CLUSTER}#${ADMIN}#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+            if in_state "aws_eks_access_policy_association.admin_cluster_admin"; then
+              echo "  • Already in state"
+            else
+              echo "  • Checking if policy association exists ($ASSOC_ID)"
+              if aws eks list-access-policies --cluster-name "${CLUSTER}" --region "${AWS_REGION}" | grep -q "AmazonEKSClusterAdminPolicy"; then
+                echo "  • Importing ($ASSOC_ID)"
+                terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                  aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || {
+                  echo "  • Failed to import policy association $ASSOC_ID"
+                  exit 1
+                }
+                echo "  • Successfully imported policy association"
+              else
+                echo "  • Policy association does not exist; will be created during apply"
+              fi
+            fi
+          else
+            echo "  • Cluster ${CLUSTER} does not exist; access resources will be created during apply"
           fi
 
       - name: Terraform Plan
@@ -179,6 +305,7 @@ jobs:
             -out=tfplan \
             -var "region=$AWS_REGION" \
             -var "admin_principal_arn=${ADMIN}" \
+            -var-file=terraform.tfvars \
             -no-color \
             "${VAR_ARGS[@]}"
 
@@ -189,5 +316,3 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=10m -auto-approve -no-color tfplan
-
-
