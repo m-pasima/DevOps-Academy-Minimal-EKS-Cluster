@@ -14,26 +14,15 @@ resource "aws_internet_gateway" "igw" {
   }
 }
 
-# Static map to avoid dynamic for_each issues
-locals {
-  subnets = {
-    "subnet_a" = {
-      cidr_block        = "10.10.1.0/24"
-      availability_zone = data.aws_availability_zones.available.names[0]
-    }
-    "subnet_b" = {
-      cidr_block        = "10.10.2.0/24"
-      availability_zone = data.aws_availability_zones.available.names[1]
-    }
-  }
-}
-
 resource "aws_subnet" "public" {
-  for_each = local.subnets
+  for_each = {
+    a = data.aws_availability_zones.available.names[0]
+    b = data.aws_availability_zones.available.names[1]
+  }
 
   vpc_id                  = aws_vpc.this.id
-  cidr_block              = each.value.cidr_block
-  availability_zone       = each.value.availability_zone
+  cidr_block              = each.key == "a" ? "10.10.1.0/24" : "10.10.2.0/24"
+  availability_zone       = each.value
   map_public_ip_on_launch = true
 
   tags = {
@@ -57,7 +46,7 @@ resource "aws_route" "default_igw" {
 }
 
 resource "aws_route_table_association" "public" {
-  for_each       = local.subnets
-  subnet_id      = aws_subnet.public[each.key].id
+  for_each       = aws_subnet.public
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.public.id
 }
