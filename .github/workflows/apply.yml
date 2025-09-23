@@ -138,7 +138,7 @@ jobs:
 
           in_state() {
             local addr="$1"
-            terraform -chdir="${{ env.TF_DIR }}" state list 2>/dev/null | grep -qx "$addr"
+            terraform -chdir="${{ env.TF_DIR }}" state list -lock=false 2>/dev/null | grep -qx "$addr"
           }
 
           echo "→ Access Entry"
@@ -192,6 +192,4 @@ jobs:
         run: |
           set -euo pipefail
           terraform -chdir="${{ env.TF_DIR }}" apply -lock-timeout=10m -auto-approve -no-color tfplan
-
-
 

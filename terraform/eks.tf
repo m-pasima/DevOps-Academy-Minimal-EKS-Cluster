@@ -130,10 +130,17 @@ resource "aws_eks_cluster" "this" {
     subnet_ids              = [for s in aws_subnet.public : s.id]
   }
 
-  # Enable Access API, but DO NOT bootstrap the creator (we'll manage via TF)
+  # Keep Access API enabled BUT do not flip the bootstrap bit after creation.
   access_config {
-    authentication_mode                         = "API_AND_CONFIG_MAP" # or "API"
-    bootstrap_cluster_creator_admin_permissions = false
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
+  # Prevent future plans from trying to toggle this ForceNew bit.
+  lifecycle {
+    ignore_changes = [
+      access_config[0].bootstrap_cluster_creator_admin_permissions
+    ]
   }
 
   depends_on = [
