@@ -1,4 +1,3 @@
-
 name: Apply EKS (dir, IAM user)
 
 on:
@@ -141,12 +140,12 @@ jobs:
 
           in_state() {
             local addr="$1"
-            terraform -chdir="${{ env.TF_DIR }}" state list -lock=false 2>/dev/null | grep -Fx "$addr" >/dev/null
+            terraform -chdir="${{ env.TF_DIR }}" state list 2>/dev/null | grep -Fx "$addr" >/dev/null
           }
 
           # Debug: Show current Terraform state
           echo "→ Current Terraform state"
-          terraform -chdir="${{ env.TF_DIR }}" state list -lock=false || echo "  • No resources in state"
+          terraform -chdir="${{ env.TF_DIR }}" state list 2>/dev/null || echo "  • No resources in state"
 
           # Import IAM Role: teaching-eks-cluster-role
           echo "→ IAM Role (cluster)"
@@ -156,7 +155,7 @@ jobs:
             echo "  • Checking if teaching-eks-cluster-role exists in AWS"
             if aws iam get-role --role-name teaching-eks-cluster-role --region "${AWS_REGION}" >/dev/null 2>&1; then
               echo "  • Importing (teaching-eks-cluster-role)"
-              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                 aws_iam_role.cluster teaching-eks-cluster-role || {
                 echo "  • Failed to import IAM role teaching-eks-cluster-role"
                 exit 1
@@ -175,7 +174,7 @@ jobs:
             echo "  • Checking if teaching-eks-node-role exists in AWS"
             if aws iam get-role --role-name teaching-eks-node-role --region "${AWS_REGION}" >/dev/null 2>&1; then
               echo "  • Importing (teaching-eks-node-role)"
-              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                 aws_iam_role.node teaching-eks-node-role || {
                 echo "  • Failed to import IAM role teaching-eks-node-role"
                 exit 1
@@ -194,7 +193,7 @@ jobs:
             echo "  • Checking if subnet-07283d2152a4fbb12 exists in AWS"
             if aws ec2 describe-subnets --subnet-ids subnet-07283d2152a4fbb12 --region "${AWS_REGION}" >/dev/null 2>&1; then
               echo "  • Importing (subnet-07283d2152a4fbb12)"
-              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                 aws_subnet.public[\"a\"] subnet-07283d2152a4fbb12 || {
                 echo "  • Failed to import subnet subnet-07283d2152a4fbb12"
                 exit 1
@@ -213,7 +212,7 @@ jobs:
             echo "  • Checking if subnet-05f324d922d729008 exists in AWS"
             if aws ec2 describe-subnets --subnet-ids subnet-05f324d922d729008 --region "${AWS_REGION}" >/dev/null 2>&1; then
               echo "  • Importing (subnet-05f324d922d729008)"
-              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                 aws_subnet.public[\"b\"] subnet-05f324d922d729008 || {
                 echo "  • Failed to import subnet subnet-05f324d922d729008"
                 exit 1
@@ -232,7 +231,7 @@ jobs:
             echo "  • Checking if rtbassoc-0ecb61f0f3ac4305f exists in AWS"
             if aws ec2 describe-route-tables --filters Name=association.route-table-association-id,Values=rtbassoc-0ecb61f0f3ac4305f --region "${AWS_REGION}" >/dev/null 2>&1; then
               echo "  • Importing (rtbassoc-0ecb61f0f3ac4305f)"
-              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                 aws_route_table_association.public[\"a\"] rtbassoc-0ecb61f0f3ac4305f || {
                 echo "  • Failed to import route table association rtbassoc-0ecb61f0f3ac4305f"
                 exit 1
@@ -251,7 +250,7 @@ jobs:
             echo "  • Checking if rtbassoc-0ef7cae7d11d64815 exists in AWS"
             if aws ec2 describe-route-tables --filters Name=association.route-table-association-id,Values=rtbassoc-0ef7cae7d11d64815 --region "${AWS_REGION}" >/dev/null 2>&1; then
               echo "  • Importing (rtbassoc-0ef7cae7d11d64815)"
-              terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+              terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                 aws_route_table_association.public[\"b\"] rtbassoc-0ef7cae7d11d64815 || {
                 echo "  • Failed to import route table association rtbassoc-0ef7cae7d11d64815"
                 exit 1
@@ -274,7 +273,7 @@ jobs:
               echo "  • Checking if access entry exists (${CLUSTER}:${ADMIN})"
               if aws eks describe-access-entry --cluster-name "${CLUSTER}" --principal-arn "${ADMIN}" --region "${AWS_REGION}" >/dev/null 2>&1; then
                 echo "  • Importing (${CLUSTER}:${ADMIN})"
-                terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                   aws_eks_access_entry.admin "${CLUSTER}:${ADMIN}" || {
                   echo "  • Failed to import access entry ${CLUSTER}:${ADMIN}"
                   exit 1
@@ -294,7 +293,7 @@ jobs:
               echo "  • Checking if policy association exists ($ASSOC_ID)"
               if aws eks list-access-policies --cluster-name "${CLUSTER}" --region "${AWS_REGION}" | grep -q "AmazonEKSClusterAdminPolicy"; then
                 echo "  • Importing ($ASSOC_ID)"
-                terraform -chdir="${{ env.TF_DIR }}" import -lock=false -input=false -no-color \
+                terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                   aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || {
                   echo "  • Failed to import policy association $ASSOC_ID"
                   exit 1
