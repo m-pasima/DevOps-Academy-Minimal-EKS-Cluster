@@ -291,7 +291,7 @@ jobs:
               echo "  • Already in state"
             else
               echo "  • Checking if policy association exists ($ASSOC_ID)"
-              if aws eks list-access-policies --cluster-name "${CLUSTER}" --region "${AWS_REGION}" | grep -q "AmazonEKSClusterAdminPolicy"; then
+              if aws eks describe-access-entry --cluster-name "${CLUSTER}" --principal-arn "${ADMIN}" --region "${AWS_REGION}" | grep -q "AmazonEKSClusterAdminPolicy"; then
                 echo "  • Importing ($ASSOC_ID)"
                 terraform -chdir="${{ env.TF_DIR }}" import -input=false -no-color \
                   aws_eks_access_policy_association.admin_cluster_admin "$ASSOC_ID" || {
