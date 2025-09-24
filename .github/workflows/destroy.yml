@@ -27,12 +27,13 @@ jobs:
       TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           clean: true
           fetch-depth: 0
 
-      - name: Resolve directory & show files
+      - name: Resolve Directory & Show Files
         shell: bash
         run: |
           set -euo pipefail
@@ -42,32 +43,28 @@ jobs:
           echo "PWD=$(pwd)"
           echo "=== ls $TF_DIR ==="
           ls -la "$TF_DIR"
+          echo "=== terraform.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/terraform.tf" 2>/dev/null || echo "No terraform.tf"
+          echo "=== variables.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/variables.tf" 2>/dev/null || echo "No variables.tf"
+          echo "=== vpc.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/vpc.tf" 2>/dev/null || echo "No vpc.tf"
+          echo "=== eks.tf (head) ==="
+          sed -n '1,120p' "$TF_DIR/eks.tf" 2>/dev/null || echo "No eks.tf"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
-      - name: Terraform Init (providers only, no backend)
-        shell: bash
-        run: |
-          set -euo pipefail
-          terraform -chdir="${{ env.TF_DIR }}" init -backend=false -input=false -upgrade
-
-      - name: Terraform Validate
-        shell: bash
-        run: |
-          set -euo pipefail
-          terraform -chdir="${{ env.TF_DIR }}" validate -no-color
-
-      - name: Configure AWS (keys)
+      - name: Configure AWS (Access Keys)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Compute backend key
+      - name: Compute Backend Key
         shell: bash
         run: |
           set -euo pipefail
@@ -80,7 +77,24 @@ jobs:
           echo "BACKEND_KEY=$BACKEND_KEY" >> "$GITHUB_ENV"
           echo "Using BACKEND_KEY=$BACKEND_KEY"
 
-      - name: Terraform Init (remote backend)
+      - name: Derive admin_principal_arn
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARN="$(aws sts get-caller-identity --query Arn --output text)"
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          if [[ "$ARN" == *":user/"* ]]; then
+            ADMIN="$ARN"
+          elif [[ "$ARN" == *":assumed-role/"* ]]; then
+            ROLE_NAME="$(echo "$ARN" | awk -F'/' '{print $2}')"
+            ADMIN="arn:aws:iam::${ACCOUNT}:role/${ROLE_NAME}"
+          else
+            echo "❌ Unsupported caller ARN for admin mapping: $ARN"; exit 1
+          fi
+          echo "TF_VAR_admin_principal_arn=$ADMIN" >> "$GITHUB_ENV"
+          echo "Resolved: admin_principal_arn=$ADMIN"
+
+      - name: Terraform Init
         shell: bash
         run: |
           set -euo pipefail
@@ -91,7 +105,14 @@ jobs:
             -backend-config="dynamodb_table=$TF_BACKEND_TABLE" \
             -input=false -no-color
 
-      - name: Terraform Destroy
+      - name: Verify Terraform State
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "→ Current Terraform state"
+          terraform -chdir="${{ env.TF_DIR }}" state list 2>/dev/null || echo "  • No resources in state"
+
+      - name: Terraform Plan (Destroy)
         env:
           TF_IN_AUTOMATION: true
         shell: bash
@@ -107,9 +128,31 @@ jobs:
             VAR_ARGS+=("-var" "$w")
           done
 
-          terraform -chdir="${{ env.TF_DIR }}" destroy \
+          terraform -chdir="${{ env.TF_DIR }}" plan -destroy \
             -lock-timeout=10m \
-            -auto-approve \
             -input=false \
+            -out=tfplan \
             -var "region=$AWS_REGION" \
+            -var "admin_principal_arn=$TF_VAR_admin_principal_arn" \
+            -var-file=terraform.tfvars \
+            -no-color \
             "${VAR_ARGS[@]}"
+
+      - name: Terraform Destroy
+        env:
+          TF_IN_AUTOMATION: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir="${{ env.TF_DIR }}" apply -destroy -lock-timeout=10m -auto-approve -no-color tfplan
+
+      # Optional: Cleanup S3 bucket and DynamoDB table (uncomment to enable)
+      # - name: Cleanup Terraform Backend
+      #   if: success()
+      #   shell: bash
+      #   run: |
+      #     set -euo pipefail
+      #     echo "→ Deleting Terraform state file from S3"
+      #     aws s3 rm "s3://$TF_BACKEND_BUCKET/$BACKEND_KEY" || echo "  • S3 state file not found or already deleted"
+      #     echo "→ Deleting DynamoDB lock table"
+      #     aws dynamodb delete-table --table-name "$TF_BACKEND_TABLE" --region "$AWS_REGION" || echo "  • DynamoDB table not found or already deleted"
