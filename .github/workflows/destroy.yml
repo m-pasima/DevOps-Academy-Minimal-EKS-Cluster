@@ -1,11 +1,19 @@
 name: Destroy EKS
+
 on:
   workflow_dispatch:
     inputs:
+      tf_dir:
+        description: 'Terraform directory to destroy'
+        required: true
+        default: 'terraform'
       tf_vars:
-        description: 'Extra TF -var values (key=value,space-separated)'
+        description: 'Extra TF -var values (key=value, space-separated). Example: project_name=teaching-eks cluster_version=1.29'
         required: false
         default: ''
+
+concurrency:
+  group: tf-destroy-${{ github.ref }}-${{ github.event.inputs.tf_dir || 'terraform' }}
 
 jobs:
   destroy:
@@ -13,37 +21,95 @@ jobs:
     permissions:
       contents: read
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      TF_BACKEND_BUCKET: ${{ secrets.TF_BACKEND_BUCKET }}
-      TF_BACKEND_TABLE:  ${{ secrets.TF_BACKEND_TABLE }}
-      TF_BACKEND_KEY:    ${{ secrets.TF_BACKEND_KEY }}
+      AWS_REGION:         ${{ secrets.AWS_REGION }}
+      TF_BACKEND_BUCKET:  ${{ secrets.TF_BACKEND_BUCKET }}
+      TF_BACKEND_TABLE:   ${{ secrets.TF_BACKEND_TABLE }}
+      TF_BACKEND_KEY:     ${{ secrets.TF_BACKEND_KEY }}
+
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure AWS (Access Keys)
-        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Resolve directory & show files
+        shell: bash
+        run: |
+          set -euo pipefail
+          TF_DIR="${{ github.event.inputs.tf_dir || 'terraform' }}"
+          echo "TF_DIR=$TF_DIR" >> "$GITHUB_ENV"
+          test -d "$TF_DIR" || { echo "❌ Directory '$TF_DIR' not found"; exit 1; }
+          echo "PWD=$(pwd)"
+          echo "=== ls $TF_DIR ==="
+          ls -la "$TF_DIR"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.8.5
 
-      - name: Terraform Init
-        working-directory: terraform
+      - name: Terraform Init (providers only, no backend)
+        shell: bash
         run: |
-          terraform init \
+          set -euo pipefail
+          terraform -chdir="${{ env.TF_DIR }}" init -backend=false -input=false -upgrade
+
+      - name: Terraform Validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir="${{ env.TF_DIR }}" validate -no-color
+
+      - name: Configure AWS (keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Compute backend key
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${TF_BACKEND_KEY}" == *.tfstate ]]; then
+            BACKEND_KEY="${TF_BACKEND_KEY}"
+          else
+            PREFIX="${TF_BACKEND_KEY%/}"
+            BACKEND_KEY="${PREFIX}/${{ env.TF_DIR }}/terraform.tfstate"
+          fi
+          echo "BACKEND_KEY=$BACKEND_KEY" >> "$GITHUB_ENV"
+          echo "Using BACKEND_KEY=$BACKEND_KEY"
+
+      - name: Terraform Init (remote backend)
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform -chdir="${{ env.TF_DIR }}" init \
             -backend-config="bucket=$TF_BACKEND_BUCKET" \
-            -backend-config="key=$TF_BACKEND_KEY" \
+            -backend-config="key=$BACKEND_KEY" \
             -backend-config="region=$AWS_REGION" \
-            -backend-config="dynamodb_table=$TF_BACKEND_TABLE"
+            -backend-config="dynamodb_table=$TF_BACKEND_TABLE" \
+            -input=false -no-color
 
       - name: Terraform Destroy
-        working-directory: terraform
+        env:
+          TF_IN_AUTOMATION: true
+        shell: bash
         run: |
-          terraform destroy -auto-approve -lock=false\
+          set -euo pipefail
+          VAR_ARGS=()
+          read -r -a WORDS <<< "${{ github.event.inputs.tf_vars }}"
+          for w in "${WORDS[@]:-}"; do
+            [[ -z "$w" ]] && continue
+            if [[ "$w" != *"="* ]]; then
+              echo "⚠️ Skipping invalid tf_vars token (no '='): $w"; continue
+            fi
+            VAR_ARGS+=("-var" "$w")
+          done
+
+          terraform -chdir="${{ env.TF_DIR }}" destroy \
+            -lock-timeout=10m \
+            -auto-approve \
+            -input=false \
             -var "region=$AWS_REGION" \
-            ${{ github.event.inputs.tf_vars }}
+            "${VAR_ARGS[@]}"
