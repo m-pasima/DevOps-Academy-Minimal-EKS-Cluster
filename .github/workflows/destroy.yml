@@ -128,13 +128,17 @@ jobs:
             VAR_ARGS+=("-var" "$w")
           done
 
+          TFVARS_PATH="${{ env.TF_DIR }}/terraform.tfvars"
+          VAR_FILE_ARG=""
+          if [[ -f "$TFVARS_PATH" ]]; then VAR_FILE_ARG="-var-file=terraform.tfvars"; fi
+
           terraform -chdir="${{ env.TF_DIR }}" plan -destroy \
             -lock-timeout=10m \
             -input=false \
             -out=tfplan \
             -var "region=$AWS_REGION" \
             -var "admin_principal_arn=$TF_VAR_admin_principal_arn" \
-            -var-file=terraform.tfvars \
+            ${VAR_FILE_ARG} \
             -no-color \
             "${VAR_ARGS[@]}"
 

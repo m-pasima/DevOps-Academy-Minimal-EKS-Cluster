@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit guard: block committing Terraform states/vars and obvious AWS keys
+# Enable with: git config core.hooksPath .githooks
+
+red()  { printf "\033[31m%s\033[0m\n" "$*"; }
+warn() { printf "\033[33m%s\033[0m\n" "$*"; }
+
+# Collect staged files
+mapfile -d '' STAGED < <(git diff --cached --name-only -z)
+
+BLOCKED=0
+
+# Block by filename pattern
+FILE_PAT='(\.tfvars$|\.tfstate($|\.)|(^|/)\.env($|\.)|\.pem$|\.key$)'
+for f in "${STAGED[@]}"; do
+  # Skip deletions/renames where file no longer exists
+  if [[ "$f" =~ $FILE_PAT ]]; then
+    red "Blocking commit: file matches sensitive pattern: $f"
+    BLOCKED=1
+  fi
+done
+
+# Content scanning for obvious AWS credentials
+for f in "${STAGED[@]}"; do
+  # only files, readable from index
+  if git cat-file -e ":$f" 2>/dev/null; then
+    blob=$(git show ":$f" | tr -d '\r')
+    if grep -E -q 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' <<<"$blob"; then
+      red "Possible AWS Access Key ID detected in: $f"
+      BLOCKED=1
+    fi
+    if grep -Ei -q 'aws[_-]?secret[_-]?access[_-]?key[^a-zA-Z0-9]*[=:][^[:cntrl:]]{20,}' <<<"$blob"; then
+      red "Possible AWS Secret Access Key detected in: $f"
+      BLOCKED=1
+    fi
+  fi
+done
+
+if [[ $BLOCKED -ne 0 ]]; then
+  echo
+  warn "Commit aborted by pre-commit hook."
+  warn "- Keep local secrets in untracked files (e.g., terraform.tfvars)."
+  warn "- Ensure .gitignore includes *.tfvars, *.tfstate, .env, keys."
+  warn "- To bypass (not recommended), use: git commit --no-verify"
+  exit 1
+fi
+
+exit 0
+

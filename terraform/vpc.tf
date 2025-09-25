@@ -46,7 +46,10 @@ resource "aws_route" "default_igw" {
 }
 
 resource "aws_route_table_association" "public" {
-  for_each       = aws_subnet.public
-  subnet_id      = each.value.id
+  for_each = {
+    a = data.aws_availability_zones.available.names[0]
+    b = data.aws_availability_zones.available.names[1]
+  }
+  subnet_id      = aws_subnet.public[each.key].id
   route_table_id = aws_route_table.public.id
 }

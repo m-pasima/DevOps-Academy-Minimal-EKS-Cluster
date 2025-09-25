@@ -1,3 +1,4 @@
+# IAM Role for EKS Cluster
 resource "aws_iam_role" "cluster" {
   name = "${var.project_name}-cluster-role"
   assume_role_policy = jsonencode({
@@ -10,6 +11,7 @@ resource "aws_iam_role" "cluster" {
   })
 }
 
+# Attach Policies to Cluster Role
 resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
   role       = aws_iam_role.cluster.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
@@ -20,6 +22,74 @@ resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSVPCResourceControlle
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
 }
 
+# IAM Policy for AWS Load Balancer Controller
+data "http" "iam_policy_alb" {
+  url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.2/docs/install/iam_policy.json"
+}
+
+resource "aws_iam_policy" "aws_load_balancer_controller" {
+  name        = "${var.project_name}-AWSLoadBalancerControllerIAMPolicy"
+  description = "Policy for AWS Load Balancer Controller"
+  policy      = data.http.iam_policy_alb.response_body
+}
+
+# IAM Role for AWS Load Balancer Controller with IRSA
+resource "aws_iam_role" "aws_load_balancer_controller" {
+  name = "${var.project_name}-AWSLoadBalancerControllerRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "eks.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      },
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud" = "sts.amazonaws.com",
+            "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Attach Policy to AWS Load Balancer Controller Role
+resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller_attach" {
+  role       = aws_iam_role.aws_load_balancer_controller.name
+  policy_arn = aws_iam_policy.aws_load_balancer_controller.arn
+}
+
+# OIDC Provider for EKS
+data "aws_eks_cluster" "cluster" {
+  name       = aws_eks_cluster.this.name
+  depends_on = [aws_eks_cluster.this]
+}
+
+# Compute OIDC provider thumbprint dynamically to avoid static/rotating values
+data "tls_certificate" "eks" {
+  url        = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
+  depends_on = [aws_eks_cluster.this]
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  url            = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
+  client_id_list = ["sts.amazonaws.com"]
+  # Use the TLS certificate fingerprint from the OIDC issuer
+  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+}
+
+# Security Group for EKS Cluster
 resource "aws_security_group" "cluster" {
   name        = "${var.project_name}-cluster-sg"
   description = "EKS cluster security group"
@@ -35,6 +105,7 @@ resource "aws_security_group" "cluster" {
   tags = { Name = "${var.project_name}-cluster-sg" }
 }
 
+# Security Group for EKS Worker Nodes
 resource "aws_security_group" "node" {
   name        = "${var.project_name}-node-sg"
   description = "EKS worker nodes"
@@ -50,6 +121,7 @@ resource "aws_security_group" "node" {
   tags = { Name = "${var.project_name}-node-sg" }
 }
 
+# Security Group Rules
 resource "aws_security_group_rule" "cluster_in_from_nodes_443" {
   type                     = "ingress"
   description              = "Nodes to control-plane API"
@@ -108,6 +180,7 @@ resource "aws_security_group_rule" "node_in_nodeports_optional" {
   }
 }
 
+# EKS Cluster
 resource "aws_eks_cluster" "this" {
   name     = "${var.project_name}-cluster"
   role_arn = aws_iam_role.cluster.arn
@@ -135,6 +208,7 @@ resource "aws_eks_cluster" "this" {
   ]
 }
 
+# IAM Role for EKS Worker Nodes
 resource "aws_iam_role" "node" {
   name = "${var.project_name}-node-role"
   assume_role_policy = jsonencode({
@@ -147,6 +221,7 @@ resource "aws_iam_role" "node" {
   })
 }
 
+# Attach Policies to Node Role
 resource "aws_iam_role_policy_attachment" "node_AmazonEKSWorkerNodePolicy" {
   role       = aws_iam_role.node.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
@@ -162,6 +237,7 @@ resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 }
 
+# Launch Template for Nodes
 resource "aws_launch_template" "nodes" {
   name_prefix            = "${var.project_name}-ng-"
   update_default_version = true
@@ -178,6 +254,7 @@ resource "aws_launch_template" "nodes" {
   }
 }
 
+# Spot Node Group
 resource "aws_eks_node_group" "spot" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.project_name}-spot"
@@ -209,6 +286,7 @@ resource "aws_eks_node_group" "spot" {
   ]
 }
 
+# On-Demand Node Group
 resource "aws_eks_node_group" "on_demand" {
   cluster_name    = aws_eks_cluster.this.name
   node_group_name = "${var.project_name}-on-demand"
@@ -240,12 +318,14 @@ resource "aws_eks_node_group" "on_demand" {
   ]
 }
 
+# EKS Access Entry for Admin
 resource "aws_eks_access_entry" "admin" {
-  cluster_name  = aws_eks_cluster.this.name
-  principal_arn = var.admin_principal_arn
-  type          = "STANDARD"
+  cluster_name      = aws_eks_cluster.this.name
+  principal_arn     = var.admin_principal_arn
+  type              = "STANDARD"
 }
 
+# EKS Access Policy Association
 resource "aws_eks_access_policy_association" "admin_cluster_admin" {
   cluster_name  = aws_eks_cluster.this.name
   principal_arn = var.admin_principal_arn
