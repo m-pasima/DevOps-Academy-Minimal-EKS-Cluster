@@ -85,3 +85,5 @@ variable "lt_version" {
   description = "Launch Template version for EKS node groups (\"$Latest\" or a specific version string like \"3\")."
   default     = "$Latest"
 }
+
+// Teaching signer is managed manually per README; no Terraform toggle retained.

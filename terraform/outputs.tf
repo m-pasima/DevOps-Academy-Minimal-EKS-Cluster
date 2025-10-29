@@ -7,3 +7,4 @@ output "efs_csi_addon_version" {
   description = "Version of the aws-efs-csi-driver add-on"
   value       = data.aws_eks_addon.efs_csi.addon_version
 }
+
