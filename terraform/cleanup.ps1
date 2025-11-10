@@ -260,8 +260,9 @@ function Terraform-Destroy($label) {
   $tfDir = Join-Path $PSScriptRoot "."
   Push-Location $tfDir
   try {
-    & terraform init -backend-config=backend.tfvars -reconfigure | Write-Output
-    & terraform destroy -var-file="terraform.tfvars" -auto-approve -input=false
+    # Use space-separated args to avoid PowerShell parsing edge-cases
+    & terraform init -backend-config backend.tfvars -reconfigure | Write-Output
+    & terraform destroy -var-file terraform.tfvars -auto-approve -input=false
   } finally {
     Pop-Location
   }
